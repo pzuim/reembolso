@@ -1,6 +1,6 @@
 /* Service worker: guarda o app no celular para funcionar sem internet (inclusive a leitura dos recibos).
    Ao publicar uma nova versão, aumente VERSAO para que os celulares baixem os arquivos novos. */
-const VERSAO = 'v1.4.0';
+const VERSAO = 'v1.5.0';
 const CACHE_APP = 'reembolso-app-' + VERSAO;
 const CACHE_OCR = 'reembolso-ocr-v5.1.1';
 

@@ -1,6 +1,6 @@
 /* App Reembolso: telas, formulário e fluxo principal. */
 (() => {
-  const VERSAO = '1.4.0';
+  const VERSAO = '1.5.0';
   // Classificação (lista da empresa). As três primeiras aparecem direto; as outras ficam em "Outras".
   const CLASSIFICACOES = ['Alimentação', 'Transporte', 'Hospedagem', 'Insumos', 'Equipamentos', 'EPI', 'Prestação de serviço', 'Plataformas', 'República Reflora', 'Salário', 'VERRA'];
   const PRINCIPAIS = 3;
@@ -14,7 +14,9 @@
   const estado = {
     perfil: null,
     padroes: { fase: '' },
-    periodo: { de: '', ate: '' },
+    ano: 0, // sem filtro, a tela mostra um mês
+    mes: 0,
+    filtro: null, // { de, ate } quando há período escolhido no calendário
     gastos: [],
     tela: '',
     form: null,
@@ -51,16 +53,25 @@
       : new Date(h.getFullYear(), h.getMonth(), DIA_DE_CORTE);
     return { de: isoLocal(inicio), ate: isoLocal(h) };
   }
-  const noPeriodo = g => g.data >= estado.periodo.de && g.data <= estado.periodo.ate;
-  const doPeriodo = () => estado.gastos.filter(noPeriodo);
-  const naoEnviadosFora = () => estado.gastos.filter(g => !g.enviadoEm && !noPeriodo(g));
-  const textoPeriodo = () => `${dataBR(estado.periodo.de)} a ${dataBR(estado.periodo.ate)}`;
+  // O que aparece na tela (e vai para a planilha): o período filtrado ou, sem filtro, o mês escolhido.
+  const chaveMes = () => `${estado.ano}-${pad(estado.mes)}`;
+  const visivel = g => (estado.filtro
+    ? g.data >= estado.filtro.de && g.data <= estado.filtro.ate
+    : g.data.slice(0, 7) === chaveMes());
+  const visiveis = () => estado.gastos.filter(visivel);
+  // só faz sentido avisar de recibos esquecidos quando há um período filtrado
+  const naoEnviadosFora = () => (estado.filtro ? estado.gastos.filter(g => !g.enviadoEm && !visivel(g)) : []);
+  const rotuloVisivel = () => (estado.filtro
+    ? `${dataBR(estado.filtro.de)} a ${dataBR(estado.filtro.ate)}`
+    : nomeMes(estado.ano, estado.mes));
 
-  // Mês da planilha (cabeçalho "Mês/ano" e nome do arquivo): o mês do prazo de envio do período.
-  function prazoDoPeriodo() {
-    const [a, m, d] = estado.periodo.ate.split('-').map(Number);
+  // Mês da planilha (cabeçalho "Mês/ano" e nome do arquivo): com filtro, o mês do prazo de envio
+  // do período (dia 20); sem filtro, o próprio mês mostrado.
+  function mesDaPlanilha() {
+    if (!estado.filtro) return { ano: estado.ano, mes: estado.mes, prazo: null };
+    const [a, m, d] = estado.filtro.ate.split('-').map(Number);
     const p = d <= DIA_DE_CORTE ? new Date(a, m - 1, DIA_DE_CORTE) : new Date(a, m, DIA_DE_CORTE);
-    return { ano: p.getFullYear(), mes: p.getMonth() + 1, dia: isoLocal(p) };
+    return { ano: p.getFullYear(), mes: p.getMonth() + 1, prazo: isoLocal(p) };
   }
 
   function lerValor(s) {
@@ -192,7 +203,10 @@
 
   async function entrar() {
     estado.gastos = await DB.todos('gastos');
-    estado.periodo = periodoPadrao();
+    const hoje = new Date();
+    estado.ano = hoje.getFullYear();
+    estado.mes = hoje.getMonth() + 1;
+    estado.filtro = null;
     history.replaceState({ tela: 'lista' }, '');
     mostrar('lista');
     renderLista();
@@ -271,11 +285,16 @@
     (x.data === y.data ? (x.criadoEm || '').localeCompare(y.criadoEm || '') : x.data.localeCompare(y.data)) * (desc ? -1 : 1));
 
   function renderLista() {
-    const gastos = ordenar(doPeriodo(), true);
+    const gastos = ordenar(visiveis(), true);
     const total = gastos.reduce((s, g) => s + g.valor, 0);
-    $('per-texto').textContent = `${dataBR(estado.periodo.de)} → ${dataBR(estado.periodo.ate)}`;
-    const padrao = periodoPadrao();
-    $('per-atual').hidden = estado.periodo.de === padrao.de && estado.periodo.ate === padrao.ate;
+    const f = estado.filtro;
+    $('mes-nav').hidden = !!f;
+    $('mes-nome').textContent = nomeMes(estado.ano, estado.mes);
+    $('per-texto').textContent = f ? `${dataBR(f.de)} → ${dataBR(f.ate)}` : 'Filtrar por período';
+    $('per-botao').classList.toggle('ativo', !!f);
+    $('per-botao').classList.toggle('sem-filtro', !f);
+    $('per-limpar').hidden = !f;
+    $('lista-vazia-titulo').textContent = f ? 'Nenhum gasto neste período.' : 'Nenhum gasto neste mês.';
     const resumo = $('per-resumo');
     resumo.textContent = `${plural(gastos.length, 'recibo', 'recibos')} · Total `;
     resumo.appendChild(el('strong', '', moeda(total)));
@@ -320,13 +339,15 @@
   // 1º toque marca o início, 2º toque o fim; um novo toque recomeça a seleção.
   const cal = { de: '', ate: '' };
 
+  // Abre com o filtro atual marcado; sem filtro, abre vazio no mês que está na tela.
   function abrirCalendario() {
-    cal.de = estado.periodo.de;
-    cal.ate = estado.periodo.ate;
+    cal.de = estado.filtro ? estado.filtro.de : '';
+    cal.ate = estado.filtro ? estado.filtro.ate : '';
     montarCalendario();
     $('calendario').hidden = false;
     history.pushState({ calendario: true }, '');
-    const alvo = document.querySelector(`.cal-mes[data-mes="${cal.de.slice(0, 7)}"]`);
+    const mesAlvo = cal.de ? cal.de.slice(0, 7) : chaveMes();
+    const alvo = document.querySelector(`.cal-mes[data-mes="${mesAlvo}"]`) || document.querySelector('.cal-mes:last-child');
     if (alvo) alvo.scrollIntoView({ block: 'start' });
   }
 
@@ -421,14 +442,32 @@
 
   function aplicarCalendario() {
     if (!cal.de) return;
-    estado.periodo = { de: cal.de, ate: cal.ate || cal.de };
+    estado.filtro = { de: cal.de, ate: cal.ate || cal.de };
+    history.back(); // fecha o calendário
+    renderLista();
+  }
+
+  function limparCalendario() {
+    estado.filtro = null;
     history.back(); // fecha o calendário
     renderLista();
   }
 
   function incluirForaDoPeriodo() {
-    const datas = naoEnviadosFora().map(g => g.data).concat([estado.periodo.de, estado.periodo.ate]).sort();
-    estado.periodo = { de: datas[0], ate: datas[datas.length - 1] };
+    const datas = naoEnviadosFora().map(g => g.data).concat([estado.filtro.de, estado.filtro.ate]).sort();
+    estado.filtro = { de: datas[0], ate: datas[datas.length - 1] };
+    renderLista();
+  }
+
+  function mudarMes(delta) {
+    const d = new Date(estado.ano, estado.mes - 1 + delta, 1);
+    estado.ano = d.getFullYear();
+    estado.mes = d.getMonth() + 1;
+    renderLista();
+  }
+
+  function limparFiltro() {
+    estado.filtro = null;
     renderLista();
   }
 
@@ -742,13 +781,22 @@
       DB.gravarConfig('padroes', estado.padroes).catch(() => {});
     }
     fecharForm();
-    const fora = !noPeriodo(gasto);
+    const fora = !visivel(gasto);
     if (estado.filaTotal && proximoDaFila()) {
-      toast(fora ? 'Salvo (data fora do período mostrado) ✓ Próximo recibo' : 'Gasto salvo ✓ Próximo recibo');
+      toast(fora ? `Salvo (${dataBR(gasto.data)}, fora da tela atual) ✓ Próximo recibo` : 'Gasto salvo ✓ Próximo recibo');
       return;
     }
+    let msg = 'Gasto salvo ✓';
+    if (fora && !estado.filtro) {
+      // sem filtro: mostra o mês do recibo que acabou de ser salvo
+      estado.ano = +gasto.data.slice(0, 4);
+      estado.mes = +gasto.data.slice(5, 7);
+      msg = `Gasto salvo em ${nomeMes(estado.ano, estado.mes)}`;
+    } else if (fora) {
+      msg = `Gasto salvo. A data ${dataBR(gasto.data)} está fora do período filtrado.`;
+    }
     history.back();
-    toast(fora ? `Gasto salvo. A data ${dataBR(gasto.data)} está fora do período mostrado.` : 'Gasto salvo ✓');
+    toast(msg);
   }
 
   async function excluirGasto() {
@@ -775,11 +823,12 @@
 
   // ---------- exportar ----------
   function abrirExportar() {
-    const gastos = doPeriodo();
+    const gastos = visiveis();
     const total = gastos.reduce((s, g) => s + g.valor, 0);
-    const prazo = prazoDoPeriodo();
-    $('exp-mes').textContent = textoPeriodo();
-    $('exp-resumo').textContent = `${plural(gastos.length, 'gasto', 'gastos')} · Total ${moeda(total)} · Planilha de ${nomeMes(prazo.ano, prazo.mes).toLowerCase()}`;
+    const planilha = mesDaPlanilha();
+    $('exp-mes').textContent = rotuloVisivel();
+    $('exp-resumo').textContent = `${plural(gastos.length, 'gasto', 'gastos')} · Total ${moeda(total)}` +
+      (estado.filtro ? ` · Planilha de ${nomeMes(planilha.ano, planilha.mes).toLowerCase()}` : '');
     const avisos = $('exp-avisos');
     avisos.textContent = '';
     const semFoto = gastos.filter(g => !(g.fotos || []).length).length;
@@ -788,9 +837,11 @@
     const fora = naoEnviadosFora().length;
     if (semFoto) avisos.appendChild(el('li', '', `${plural(semFoto, 'gasto está', 'gastos estão')} sem foto do recibo.`));
     if (semTipo) avisos.appendChild(el('li', '', `${plural(semTipo, 'gasto está', 'gastos estão')} sem classificação.`));
-    if (enviados) avisos.appendChild(el('li', '', `${plural(enviados, 'gasto deste período já foi marcado', 'gastos deste período já foram marcados')} como enviado.`));
+    if (enviados) avisos.appendChild(el('li', '', `${plural(enviados, 'gasto já foi marcado', 'gastos já foram marcados')} como enviado.`));
     if (fora) avisos.appendChild(el('li', '', `${plural(fora, 'recibo não enviado ficou', 'recibos não enviados ficaram')} fora deste período (veja na tela anterior).`));
-    avisos.appendChild(el('li', 'info', `Prazo de envio: até ${dataBR(prazo.dia)}, por e-mail, com a planilha e os recibos em PDF.`));
+    avisos.appendChild(el('li', 'info', planilha.prazo
+      ? `Prazo de envio: até ${dataBR(planilha.prazo)}, por e-mail, com a planilha e os recibos em PDF.`
+      : 'Dica: para a planilha do ciclo de reembolso (do dia 20 ao dia 20), volte e use “Filtrar por período”.'));
     $('btn-gerar').disabled = gastos.length === 0;
     $('btn-limpar-mes').hidden = gastos.length === 0;
     $('exp-arquivos').hidden = true;
@@ -803,25 +854,25 @@
   };
 
   async function gerarArquivos() {
-    const gastos = ordenar(doPeriodo(), false);
+    const gastos = ordenar(visiveis(), false);
     if (!gastos.length) return;
-    const prazo = prazoDoPeriodo();
+    const planilha = mesDaPlanilha();
     try {
       ocupado('Gerando a planilha…');
-      const xlsx = await Exportar.gerarPlanilha(estado.perfil, prazo.ano, prazo.mes, gastos);
+      const xlsx = await Exportar.gerarPlanilha(estado.perfil, planilha.ano, planilha.mes, gastos);
       ocupado('Montando o PDF dos recibos…');
-      const pdf = await Exportar.gerarPDF(estado.perfil, 'Período ' + textoPeriodo(), gastos, id => DB.obter('fotos', id),
+      const rotulo = estado.filtro ? 'Período ' + rotuloVisivel() : rotuloVisivel();
+      const pdf = await Exportar.gerarPDF(estado.perfil, rotulo, gastos, id => DB.obter('fotos', id),
         (k, n) => ocupado(`Montando o PDF dos recibos… ${k}/${n}`));
-      const sufixo = `${pad(prazo.mes)}${prazo.ano}`;
+      const sufixo = `${pad(planilha.mes)}${planilha.ano}`;
       estado.arquivos = {
         xlsx: new File([xlsx], `Planilha_reembolso_${sufixo}.xlsx`, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
         pdf: new File([pdf], `Recibos_reembolso_${sufixo}.pdf`, { type: 'application/pdf' }),
       };
       $('arq-xlsx-nome').textContent = estado.arquivos.xlsx.name;
       $('arq-pdf-nome').textContent = estado.arquivos.pdf.name;
-      $('arq-xlsx-comp').hidden = !podeCompartilhar([estado.arquivos.xlsx]);
+      // planilha (.xlsx) não pode ser compartilhada pelo navegador no Android: só o PDF tem "Enviar"
       $('arq-pdf-comp').hidden = !podeCompartilhar([estado.arquivos.pdf]);
-      $('arq-ambos-comp').hidden = !podeCompartilhar([estado.arquivos.xlsx, estado.arquivos.pdf]);
       atualizarBotaoEnviados();
       $('exp-arquivos').hidden = false;
       $('exp-arquivos').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -834,15 +885,15 @@
   }
 
   function atualizarBotaoEnviados() {
-    const pendentes = doPeriodo().filter(g => !g.enviadoEm).length;
+    const pendentes = visiveis().filter(g => !g.enviadoEm).length;
     $('exp-enviar').hidden = !pendentes;
     $('btn-marcar-enviados').textContent = `Marcar ${plural(pendentes, 'recibo', 'recibos')} como ${pendentes === 1 ? 'enviado' : 'enviados'}`;
   }
 
   async function marcarEnviados() {
-    const pendentes = doPeriodo().filter(g => !g.enviadoEm);
+    const pendentes = visiveis().filter(g => !g.enviadoEm);
     if (!pendentes.length) return;
-    if (!(await confirmar(`Marcar ${plural(pendentes.length, 'recibo', 'recibos')} do período ${textoPeriodo()} como ${pendentes.length === 1 ? 'enviado' : 'enviados'}?\nFaça isso depois de mandar o e-mail.`, { sim: 'Marcar' }))) return;
+    if (!(await confirmar(`Marcar ${plural(pendentes.length, 'recibo', 'recibos')} (${rotuloVisivel()}) como ${pendentes.length === 1 ? 'enviado' : 'enviados'}?\nFaça isso depois de mandar o e-mail.`, { sim: 'Marcar' }))) return;
     const hoje = isoLocal(new Date());
     const atualizados = pendentes.map(g => Object.assign({}, g, { enviadoEm: hoje }));
     await DB.gravarGastos(atualizados);
@@ -866,22 +917,24 @@
 
   async function compartilhar(arquivos) {
     try {
-      await navigator.share({ files: arquivos, title: 'Reembolso ' + textoPeriodo() });
+      await navigator.share({ files: arquivos, title: 'Reembolso ' + rotuloVisivel() });
     } catch (e) {
-      if (e && e.name !== 'AbortError') avisar('Não foi possível compartilhar. Use o botão Baixar.');
+      if (e && e.name === 'AbortError') return; // a pessoa fechou a lista de apps
+      for (const a of arquivos) baixar(a);
+      avisar('O celular não deixou compartilhar direto, então o arquivo foi salvo na pasta Download.\nNo WhatsApp: toque no clipe 📎 → Documento e escolha o arquivo.');
     }
   }
 
   async function limparPeriodo() {
-    const gastos = doPeriodo();
+    const gastos = visiveis();
     if (!gastos.length) return;
-    const ok = await confirmar(`Excluir os ${gastos.length} gastos de ${textoPeriodo()} e suas fotos?\n\nFaça isso só depois de enviar a planilha. Não dá para desfazer.`, { sim: 'Excluir tudo' });
+    const ok = await confirmar(`Excluir os ${gastos.length} gastos de ${rotuloVisivel()} e suas fotos?\n\nFaça isso só depois de enviar a planilha. Não dá para desfazer.`, { sim: 'Excluir tudo' });
     if (!ok) return;
     await DB.excluirGastos(gastos);
     const ids = new Set(gastos.map(g => g.id));
     estado.gastos = estado.gastos.filter(g => !ids.has(g.id));
     history.back();
-    toast('Gastos do período excluídos');
+    toast('Gastos excluídos');
   }
 
   // ---------- ajustes ----------
@@ -924,8 +977,7 @@
       const blob = await Exportar.gerarBackup(perfil, estado.padroes, estado.gastos, id => DB.obter('fotos', id));
       const arquivo = new File([blob], `backup_reembolso_${isoLocal(new Date())}.zip`, { type: 'application/zip' });
       livre();
-      if (podeCompartilhar([arquivo])) await compartilhar([arquivo]);
-      else baixar(arquivo);
+      baixar(arquivo);
     } catch (e) {
       livre();
       avisar('Não foi possível gerar o backup: ' + e.message);
@@ -996,7 +1048,10 @@
       if (b) tocarDia(b.dataset.iso);
     });
     for (const b of document.querySelectorAll('.cal-atalhos .chip')) b.addEventListener('click', () => atalhoPeriodo(b.dataset.atalho));
-    $('per-atual').addEventListener('click', () => { estado.periodo = periodoPadrao(); renderLista(); });
+    $('per-limpar').addEventListener('click', limparFiltro);
+    $('mes-ant').addEventListener('click', () => mudarMes(-1));
+    $('mes-prox').addEventListener('click', () => mudarMes(1));
+    $('cal-limpar').addEventListener('click', limparCalendario);
     $('per-aviso').addEventListener('click', incluirForaDoPeriodo);
     $('btn-camera').addEventListener('click', () => escolherFoto('novo', 'in-camera'));
     $('btn-galeria').addEventListener('click', () => escolherFoto('novo', 'in-galeria'));
@@ -1044,9 +1099,7 @@
     $('btn-gerar').addEventListener('click', gerarArquivos);
     $('arq-xlsx-baixar').addEventListener('click', () => estado.arquivos && baixar(estado.arquivos.xlsx));
     $('arq-pdf-baixar').addEventListener('click', () => estado.arquivos && baixar(estado.arquivos.pdf));
-    $('arq-xlsx-comp').addEventListener('click', () => estado.arquivos && compartilhar([estado.arquivos.xlsx]));
     $('arq-pdf-comp').addEventListener('click', () => estado.arquivos && compartilhar([estado.arquivos.pdf]));
-    $('arq-ambos-comp').addEventListener('click', () => estado.arquivos && compartilhar([estado.arquivos.xlsx, estado.arquivos.pdf]));
     $('btn-marcar-enviados').addEventListener('click', marcarEnviados);
     $('btn-limpar-mes').addEventListener('click', limparPeriodo);
 

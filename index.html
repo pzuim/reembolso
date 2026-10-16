@@ -62,21 +62,25 @@
       </button>
     </header>
     <div class="periodo">
-      <div class="periodo-topo">
-        <span class="periodo-titulo">Período do reembolso</span>
-        <button id="per-atual" class="btn link periodo-reset" type="button" hidden>Voltar ao período atual</button>
+      <!-- sem filtro: navega por mês -->
+      <div id="mes-nav" class="mes-nav-linha">
+        <button id="mes-ant" class="btn seta" type="button" aria-label="Mês anterior">‹</button>
+        <div id="mes-nome" class="mes-nome"></div>
+        <button id="mes-prox" class="btn seta" type="button" aria-label="Próximo mês">›</button>
       </div>
-      <button id="per-botao" class="btn periodo-botao" type="button" aria-label="Escolher o período no calendário">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
-        <span id="per-texto"></span>
-        <span class="periodo-trocar">Alterar</span>
-      </button>
+      <div class="periodo-linha">
+        <button id="per-botao" class="btn periodo-botao" type="button" aria-label="Filtrar por período no calendário">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
+          <span id="per-texto"></span>
+        </button>
+        <button id="per-limpar" class="btn periodo-limpar" type="button" aria-label="Limpar filtro" hidden>✕</button>
+      </div>
       <div id="per-resumo" class="mes-resumo"></div>
       <button id="per-aviso" class="btn aviso-periodo" type="button" hidden></button>
     </div>
     <ul id="lista" class="lista"></ul>
     <div id="lista-vazia" class="vazio" hidden>
-      <p><strong>Nenhum gasto neste período.</strong></p>
+      <p><strong id="lista-vazia-titulo">Nenhum gasto neste mês.</strong></p>
       <p>Toque em <em>Fotografar recibo</em> para lançar o primeiro.</p>
     </div>
     <div class="barra-acoes">
@@ -144,7 +148,7 @@
       <button class="btn topo-icone voltar" type="button" aria-label="Voltar">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
       </button>
-      <h1 class="topo-titulo">Planilha do período</h1>
+      <h1 class="topo-titulo">Planilha e recibos</h1>
     </header>
     <div class="conteudo">
       <div class="cartao">
@@ -159,25 +163,23 @@
           <div class="arquivo-desc">Planilha no modelo da empresa</div>
           <div class="linha-btns">
             <button id="arq-xlsx-baixar" class="btn secundario" type="button">Baixar</button>
-            <button id="arq-xlsx-comp" class="btn secundario" type="button">Compartilhar</button>
           </div>
         </div>
         <div class="cartao arquivo">
           <div class="arquivo-nome" id="arq-pdf-nome"></div>
-          <div class="arquivo-desc">Todos os recibos do período, um por página</div>
+          <div class="arquivo-desc">Todos os recibos, um por página</div>
           <div class="linha-btns">
             <button id="arq-pdf-baixar" class="btn secundario" type="button">Baixar</button>
-            <button id="arq-pdf-comp" class="btn secundario" type="button">Compartilhar</button>
+            <button id="arq-pdf-comp" class="btn secundario" type="button">Enviar (WhatsApp…)</button>
           </div>
         </div>
-        <button id="arq-ambos-comp" class="btn primario largo" type="button" hidden>Compartilhar os dois (e-mail, WhatsApp…)</button>
-        <p class="dica">Depois é só anexar os dois arquivos no e-mail para o back office.</p>
+        <p class="dica">Os arquivos baixados ficam na pasta <strong>Download</strong> do celular. Para mandar pelo WhatsApp ou e-mail: abra a conversa ou o e-mail, toque no clipe 📎 (anexar) → <strong>Documento</strong> e escolha o arquivo. O Android não deixa apps de navegador compartilharem planilhas direto, por isso a planilha só tem a opção Baixar.</p>
         <div id="exp-enviar" class="cartao">
           <p class="dica">Depois de mandar o e-mail, marque os recibos como enviados. Assim o app avisa se algum recibo ficar para trás no próximo período.</p>
           <button id="btn-marcar-enviados" class="btn primario largo" type="button">Marcar como enviados</button>
         </div>
       </div>
-      <button id="btn-limpar-mes" class="btn perigo-link" type="button">Excluir todos os gastos deste período</button>
+      <button id="btn-limpar-mes" class="btn perigo-link" type="button">Excluir todos estes gastos</button>
     </div>
   </section>
 
@@ -239,7 +241,10 @@
     <div class="cal-rodape">
       <div id="cal-resumo" class="cal-resumo"></div>
       <div class="cal-legenda"><span class="cal-ponto"></span> dias com recibo lançado</div>
-      <button id="cal-aplicar" class="btn primario largo grande" type="button">Aplicar período</button>
+      <div class="linha-btns">
+        <button id="cal-limpar" class="btn secundario" type="button">Limpar filtro</button>
+        <button id="cal-aplicar" class="btn primario" type="button">Aplicar período</button>
+      </div>
     </div>
   </div>
 

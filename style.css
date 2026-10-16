@@ -168,12 +168,25 @@ legend { font-size: 14px; font-weight: 600; color: var(--texto2); padding: 0; ma
 /* Período */
 .periodo { padding: 10px 16px 12px; background: var(--cartao); border-bottom: 1px solid var(--borda); }
 .periodo > * { max-width: 608px; margin-left: auto; margin-right: auto; }
-.periodo-topo { display: flex; align-items: center; justify-content: space-between; min-height: 30px; }
-.periodo-titulo { font-size: 13px; font-weight: 700; color: var(--texto2); letter-spacing: .02em; }
-.periodo-reset { font-size: 14px; padding: 4px 0; }
+.mes-nav-linha { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.mes-nav-linha .mes-nome { flex: 1; text-align: center; }
+.periodo-linha { display: flex; gap: 8px; }
+.periodo-limpar {
+  flex: none;
+  width: 52px;
+  margin-top: 4px;
+  padding: 0;
+  background: var(--fundo);
+  border: 1px solid var(--borda);
+  color: var(--texto2);
+  font-size: 20px;
+}
+.periodo-botao.ativo { border-color: var(--verde); background: var(--verde-claro); }
+.periodo-botao.sem-filtro { font-size: 15px; font-weight: 600; color: var(--texto2); }
 .periodo-botao {
   display: flex;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   justify-content: flex-start;
   gap: 10px;
   margin-top: 4px;
@@ -181,13 +194,13 @@ legend { font-size: 14px; font-weight: 600; color: var(--texto2); padding: 0; ma
   min-height: 52px;
   background: var(--fundo);
   border: 1px solid var(--borda);
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   text-align: left;
 }
 .periodo-botao svg { color: var(--verde); flex: none; }
-.periodo-trocar { margin-left: auto; color: var(--verde); font-size: 14px; font-weight: 600; }
+#per-texto { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Calendário de período */
 .calendario { position: fixed; inset: 0; z-index: 25; display: flex; flex-direction: column; background: var(--cartao); }
