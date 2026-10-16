@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2e7d32">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Reembolso">
+  <meta name="description" content="Fotografe recibos e gere a planilha de reembolso e o PDF dos comprovantes.">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" href="icons/favicon-32.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="style.css">
+  <title>Reembolso</title>
+</head>
+<body>
+  <!-- Cadastro (primeiro acesso) -->
+  <section id="tela-cadastro" class="tela tela-centro" hidden>
+    <img src="icons/icon-192.png" alt="" class="logo">
+    <h1>Reembolso</h1>
+    <p class="sub">Fotografe seus recibos e gere a planilha de reembolso do mês.</p>
+    <form id="form-cadastro" class="cartao" autocomplete="off">
+      <label>Seu nome completo (Pagador)
+        <input name="nome" required autocomplete="name" placeholder="Ex.: Maria da Silva">
+      </label>
+      <label>Dados bancários / PIX
+        <input name="pix" required placeholder="Chave PIX ou banco/agência/conta">
+      </label>
+      <label>Crie um PIN de acesso (4 a 6 números)
+        <input name="pin" inputmode="numeric" pattern="[0-9]{4,6}" maxlength="6" placeholder="Opcional" type="password">
+      </label>
+      <p class="dica">O PIN protege o app quando você abre. Deixe em branco se não quiser.</p>
+      <button class="btn primario largo" type="submit">Começar</button>
+    </form>
+  </section>
+
+  <!-- Login com PIN -->
+  <section id="tela-pin" class="tela tela-centro" hidden>
+    <img src="icons/icon-192.png" alt="" class="logo">
+    <h1 id="pin-ola">Olá!</h1>
+    <p class="sub">Digite seu PIN para entrar.</p>
+    <form id="form-pin" class="cartao" autocomplete="off">
+      <input id="pin-entrada" class="pin-entrada" inputmode="numeric" pattern="[0-9]*" maxlength="6" type="password" aria-label="PIN" required>
+      <p id="pin-erro" class="erro" hidden>PIN incorreto.</p>
+      <button class="btn primario largo" type="submit">Entrar</button>
+      <button id="pin-esqueci" class="btn link" type="button">Esqueci meu PIN</button>
+    </form>
+  </section>
+
+  <!-- Lista do mês -->
+  <section id="tela-lista" class="tela" hidden>
+    <header class="topo">
+      <h1 class="topo-titulo">Reembolso</h1>
+      <button id="btn-exportar" class="btn topo-btn" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-4-4m4 4 4-4M5 17v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2"/></svg>
+        Planilha
+      </button>
+      <button id="btn-ajustes" class="btn topo-icone" type="button" aria-label="Ajustes">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
+    </header>
+    <div class="mes-nav">
+      <button id="mes-ant" class="btn seta" type="button" aria-label="Mês anterior">‹</button>
+      <div class="mes-info">
+        <div id="mes-nome" class="mes-nome"></div>
+        <div id="mes-resumo" class="mes-resumo"></div>
+      </div>
+      <button id="mes-prox" class="btn seta" type="button" aria-label="Próximo mês">›</button>
+    </div>
+    <ul id="lista" class="lista"></ul>
+    <div id="lista-vazia" class="vazio" hidden>
+      <p><strong>Nenhum gasto neste mês.</strong></p>
+      <p>Toque em <em>Fotografar recibo</em> para lançar o primeiro.</p>
+    </div>
+    <div class="barra-acoes">
+      <button id="btn-camera" class="btn primario largo grande" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>
+        Fotografar recibo
+      </button>
+      <div class="linha-btns">
+        <button id="btn-galeria" class="btn secundario" type="button">Da galeria</button>
+        <button id="btn-sem-foto" class="btn secundario" type="button">Sem foto</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Formulário do gasto -->
+  <section id="tela-gasto" class="tela" hidden>
+    <header class="topo">
+      <button class="btn topo-icone voltar" type="button" aria-label="Voltar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <h1 id="gasto-titulo" class="topo-titulo">Novo gasto</h1>
+    </header>
+    <div class="conteudo">
+      <div id="fotos" class="fotos"></div>
+      <div id="leitura" class="leitura" hidden>
+        <span class="giro" aria-hidden="true"></span>
+        <span id="leitura-texto">Lendo recibo…</span>
+      </div>
+      <form id="form-gasto" class="cartao form-gasto" autocomplete="off" novalidate>
+        <label>Valor (R$)
+          <input name="valor" class="campo-valor" inputmode="decimal" placeholder="0,00" required>
+        </label>
+        <fieldset>
+          <legend>Tipo de custo (Subclassificação)</legend>
+          <div id="chips-tipo" class="chips"></div>
+        </fieldset>
+        <label>Data
+          <input name="data" type="date" required>
+        </label>
+        <label>Despesa (descrição)
+          <input name="descricao" list="sugestoes-descricao" placeholder="Ex.: Almoço, Deslocamento Casa - Rodoviária">
+          <datalist id="sugestoes-descricao"></datalist>
+        </label>
+        <div class="duas-colunas">
+          <label>Classificação
+            <select name="classificacao"></select>
+          </label>
+          <label>Fase
+            <select name="fase"></select>
+          </label>
+        </div>
+        <label>Observação
+          <input name="observacao" placeholder="Opcional (ex.: nome do estabelecimento)">
+        </label>
+        <label>Link acesso NF
+          <input name="link" placeholder="Preenchido pelo QR code da nota, se houver">
+        </label>
+        <p id="gasto-erro" class="erro" hidden></p>
+        <button class="btn primario largo grande" type="submit">Salvar gasto</button>
+        <button id="btn-excluir" class="btn perigo largo" type="button" hidden>Excluir gasto</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- Exportar -->
+  <section id="tela-exportar" class="tela" hidden>
+    <header class="topo">
+      <button class="btn topo-icone voltar" type="button" aria-label="Voltar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <h1 class="topo-titulo">Planilha do mês</h1>
+    </header>
+    <div class="conteudo">
+      <div class="cartao">
+        <div id="exp-mes" class="exp-mes"></div>
+        <div id="exp-resumo" class="exp-resumo"></div>
+        <ul id="exp-avisos" class="avisos"></ul>
+        <button id="btn-gerar" class="btn primario largo grande" type="button">Gerar planilha e PDF dos recibos</button>
+      </div>
+      <div id="exp-arquivos" hidden>
+        <div class="cartao arquivo">
+          <div class="arquivo-nome" id="arq-xlsx-nome"></div>
+          <div class="arquivo-desc">Planilha no modelo da empresa</div>
+          <div class="linha-btns">
+            <button id="arq-xlsx-baixar" class="btn secundario" type="button">Baixar</button>
+            <button id="arq-xlsx-comp" class="btn secundario" type="button">Compartilhar</button>
+          </div>
+        </div>
+        <div class="cartao arquivo">
+          <div class="arquivo-nome" id="arq-pdf-nome"></div>
+          <div class="arquivo-desc">Todos os recibos do mês, um por página</div>
+          <div class="linha-btns">
+            <button id="arq-pdf-baixar" class="btn secundario" type="button">Baixar</button>
+            <button id="arq-pdf-comp" class="btn secundario" type="button">Compartilhar</button>
+          </div>
+        </div>
+        <button id="arq-ambos-comp" class="btn primario largo" type="button" hidden>Compartilhar os dois (e-mail, WhatsApp…)</button>
+        <p class="dica">Depois é só anexar os dois arquivos no e-mail para o back office.</p>
+      </div>
+      <button id="btn-limpar-mes" class="btn perigo-link" type="button">Excluir todos os gastos deste mês</button>
+    </div>
+  </section>
+
+  <!-- Ajustes -->
+  <section id="tela-ajustes" class="tela" hidden>
+    <header class="topo">
+      <button class="btn topo-icone voltar" type="button" aria-label="Voltar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <h1 class="topo-titulo">Ajustes</h1>
+    </header>
+    <div class="conteudo">
+      <form id="form-ajustes" class="cartao" autocomplete="off">
+        <h2>Seus dados (vão no cabeçalho da planilha)</h2>
+        <label>Nome completo (Pagador)
+          <input name="nome" required>
+        </label>
+        <label>Dados bancários / PIX
+          <input name="pix" required>
+        </label>
+        <h2>Valores padrão para novos gastos</h2>
+        <div class="duas-colunas">
+          <label>Classificação
+            <select name="classificacao"></select>
+          </label>
+          <label>Fase
+            <select name="fase"></select>
+          </label>
+        </div>
+        <h2>PIN de acesso</h2>
+        <label>Novo PIN (4 a 6 números)
+          <input name="pin" inputmode="numeric" pattern="[0-9]{4,6}" maxlength="6" type="password" placeholder="Deixe em branco para manter">
+        </label>
+        <label class="check"><input type="checkbox" name="semPin"> Não pedir PIN ao abrir</label>
+        <button class="btn primario largo" type="submit">Salvar ajustes</button>
+      </form>
+      <div class="cartao">
+        <h2>Cópia de segurança</h2>
+        <p class="dica">Os gastos e fotos ficam guardados só neste celular. Faça um backup de vez em quando (ex.: salve no Google Drive) para não perder nada se trocar de celular.</p>
+        <div class="linha-btns">
+          <button id="btn-backup" class="btn secundario" type="button">Fazer backup</button>
+          <button id="btn-restaurar" class="btn secundario" type="button">Restaurar backup</button>
+        </div>
+      </div>
+      <p class="versao" id="versao"></p>
+    </div>
+  </section>
+
+  <!-- Visualizar foto -->
+  <div id="visor" class="visor" hidden>
+    <img id="visor-img" alt="Foto do recibo">
+    <button id="visor-fechar" class="btn visor-fechar" type="button" aria-label="Fechar">✕</button>
+  </div>
+
+  <!-- Confirmação -->
+  <div id="modal" class="modal" hidden>
+    <div class="modal-caixa" role="dialog" aria-modal="true">
+      <p id="modal-texto"></p>
+      <input id="modal-campo" class="modal-campo" autocomplete="off" hidden>
+      <div class="linha-btns">
+        <button id="modal-nao" class="btn secundario" type="button">Cancelar</button>
+        <button id="modal-sim" class="btn primario" type="button">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="carregando" class="carregando" hidden><span class="giro"></span><span id="carregando-texto">Aguarde…</span></div>
+  <div id="aviso-atualizacao" class="aviso-atualizacao" hidden>
+    Nova versão disponível. <button id="btn-atualizar" class="btn link" type="button">Atualizar</button>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <input id="in-camera" type="file" accept="image/*" capture="environment" hidden>
+  <input id="in-galeria" type="file" accept="image/*" hidden>
+  <input id="in-backup" type="file" accept=".zip,application/zip" hidden>
+
+  <script src="vendor/jszip.min.js"></script>
+  <script src="js/db.js"></script>
+  <script src="js/leitura.js"></script>
+  <script src="js/exportar.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
