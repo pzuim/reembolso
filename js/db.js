@@ -50,6 +50,11 @@ const DB = (() => {
         t.objectStore('gastos').put(gasto);
       }),
 
+    gravarGastos: gastos =>
+      rodar(['gastos'], 'readwrite', t => {
+        for (const g of gastos) t.objectStore('gastos').put(g);
+      }),
+
     excluirGastos: gastos =>
       rodar(['gastos', 'fotos'], 'readwrite', t => {
         for (const g of gastos) {

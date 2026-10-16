@@ -1,19 +1,20 @@
 /* App Reembolso: telas, formulário e fluxo principal. */
 (() => {
-  const VERSAO = '1.2.0';
-  const LISTA1 = ['PDD', 'Plantio (PAI1)', 'Plantio (PAI2)', 'Administrativo', 'Legal'];
-  const LISTA2 = ['Alimentação', 'Transporte', 'Hospedagem', 'Insumos', 'Equipamentos', 'EPI', 'Prestação de serviço', 'Plataformas', 'República Reflora', 'Salário', 'VERRA'];
-  const LISTA3 = ['Implantação', 'Acompanhamento e manutenção'];
+  const VERSAO = '1.4.0';
+  // Classificação (lista da empresa). As três primeiras aparecem direto; as outras ficam em "Outras".
+  const CLASSIFICACOES = ['Alimentação', 'Transporte', 'Hospedagem', 'Insumos', 'Equipamentos', 'EPI', 'Prestação de serviço', 'Plataformas', 'República Reflora', 'Salário', 'VERRA'];
+  const PRINCIPAIS = 3;
+  const FASES = ['Implantação', 'Acompanhamento e manutenção'];
   const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
   const DESCRICOES_COMUNS = ['Café da manhã', 'Almoço', 'Lanche', 'Janta', 'Deslocamento (Uber)', 'Deslocamento (99)', 'Combustível', 'Estacionamento', 'Pedágio', 'Passagem de ônibus', 'Hospedagem'];
   const TELAS = ['cadastro', 'pin', 'lista', 'gasto', 'exportar', 'ajustes'];
+  const DIA_DE_CORTE = 20; // a planilha vai até o dia 20 de cada mês
 
   const $ = id => document.getElementById(id);
   const estado = {
     perfil: null,
-    padroes: { classificacao: '', fase: '' },
-    ano: 0,
-    mes: 0,
+    padroes: { fase: '' },
+    periodo: { de: '', ate: '' },
     gastos: [],
     tela: '',
     form: null,
@@ -32,27 +33,6 @@
   const moeda = c => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
   const formatarValor = c => (c / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const nomeMes = (a, m) => `${MESES[m - 1].charAt(0).toUpperCase()}${MESES[m - 1].slice(1)} de ${a}`;
-  const chaveMes = (a, m) => `${a}-${pad(m)}`;
-  const nomeChave = k => nomeMes(+k.slice(0, 4), +k.slice(5, 7));
-  const mesDoGasto = g => g.mes || g.data.slice(0, 7);
-
-  // A planilha do mês M vai até o dia 20 do mês seguinte: este é o mês mais antigo ainda "aberto".
-  function mesMaisAntigoAberto() {
-    const h = new Date();
-    let a = h.getFullYear(), m = h.getMonth() + 1;
-    if (h.getDate() <= 20) { m--; if (m < 1) { m = 12; a--; } }
-    return chaveMes(a, m);
-  }
-
-  // Em qual planilha lançar: a do mês do recibo; se o prazo dela já passou (recibo atrasado),
-  // a do mês que está aberto na tela (ou o mês mais antigo ainda no prazo).
-  function mesPadrao(data) {
-    const doRecibo = data.slice(0, 7);
-    const aberto = mesMaisAntigoAberto();
-    if (doRecibo >= aberto) return doRecibo;
-    const naTela = chaveMes(estado.ano, estado.mes);
-    return naTela >= aberto ? naTela : aberto;
-  }
   const novoId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const el = (tag, cls, texto) => {
     const e = document.createElement(tag);
@@ -60,6 +40,28 @@
     if (texto != null) e.textContent = texto;
     return e;
   };
+  const plural = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
+
+  // ---------- período do reembolso ----------
+  // Ciclo: do dia 20 do mês anterior até hoje (depois do dia 20, começa no dia 20 deste mês).
+  function periodoPadrao() {
+    const h = new Date();
+    const inicio = h.getDate() <= DIA_DE_CORTE
+      ? new Date(h.getFullYear(), h.getMonth() - 1, DIA_DE_CORTE)
+      : new Date(h.getFullYear(), h.getMonth(), DIA_DE_CORTE);
+    return { de: isoLocal(inicio), ate: isoLocal(h) };
+  }
+  const noPeriodo = g => g.data >= estado.periodo.de && g.data <= estado.periodo.ate;
+  const doPeriodo = () => estado.gastos.filter(noPeriodo);
+  const naoEnviadosFora = () => estado.gastos.filter(g => !g.enviadoEm && !noPeriodo(g));
+  const textoPeriodo = () => `${dataBR(estado.periodo.de)} a ${dataBR(estado.periodo.ate)}`;
+
+  // Mês da planilha (cabeçalho "Mês/ano" e nome do arquivo): o mês do prazo de envio do período.
+  function prazoDoPeriodo() {
+    const [a, m, d] = estado.periodo.ate.split('-').map(Number);
+    const p = d <= DIA_DE_CORTE ? new Date(a, m - 1, DIA_DE_CORTE) : new Date(a, m, DIA_DE_CORTE);
+    return { ano: p.getFullYear(), mes: p.getMonth() + 1, dia: isoLocal(p) };
+  }
 
   function lerValor(s) {
     s = String(s || '').replace(/[R$\s]/g, '');
@@ -142,6 +144,7 @@
 
   window.addEventListener('popstate', async () => {
     if (!$('visor').hidden) { fecharVisor(); return; }
+    if (!$('calendario').hidden) { $('calendario').hidden = true; return; }
     if (estado.tela === 'gasto' && estado.form && estado.form.alterado) {
       history.pushState({ tela: 'gasto' }, '');
       const resto = estado.filaTotal ? estado.fila.length : 0;
@@ -169,12 +172,9 @@
     preencherSelects();
     ligarEventos();
     $('versao').textContent = 'Versão ' + VERSAO + ' · os dados ficam somente neste celular';
-    const hoje = new Date();
-    estado.ano = hoje.getFullYear();
-    estado.mes = hoje.getMonth() + 1;
     try {
       estado.perfil = await DB.lerConfig('perfil');
-      estado.padroes = Object.assign({ classificacao: '', fase: '' }, await DB.lerConfig('padroes'));
+      estado.padroes = Object.assign({ fase: '' }, await DB.lerConfig('padroes'));
     } catch (e) {
       await avisar('Não foi possível abrir o armazenamento do celular. Se estiver em aba anônima, abra o app normalmente.\n\n' + e.message);
       return;
@@ -192,29 +192,32 @@
 
   async function entrar() {
     estado.gastos = await DB.todos('gastos');
+    estado.periodo = periodoPadrao();
     history.replaceState({ tela: 'lista' }, '');
     mostrar('lista');
     renderLista();
   }
 
   function preencherSelects() {
-    const preencher = (sel, lista) => {
+    for (const f of [$('form-gasto'), $('form-ajustes')]) {
+      const sel = f.elements.fase;
       sel.textContent = '';
       sel.appendChild(new Option('—', ''));
-      for (const item of lista) sel.appendChild(new Option(item, item));
-    };
-    for (const f of [$('form-gasto'), $('form-ajustes')]) {
-      preencher(f.elements.classificacao, LISTA1);
-      preencher(f.elements.fase, LISTA3);
+      for (const item of FASES) sel.appendChild(new Option(item, item));
     }
-    const chips = $('chips-tipo');
-    for (const tipo of LISTA2) {
+    const chip = tipo => {
       const b = el('button', 'chip', tipo);
       b.type = 'button';
       b.dataset.tipo = tipo;
       b.setAttribute('aria-pressed', 'false');
-      chips.appendChild(b);
-    }
+      return b;
+    };
+    CLASSIFICACOES.slice(0, PRINCIPAIS).forEach(t => $('chips-tipo').appendChild(chip(t)));
+    const mais = el('button', 'chip chip-mais', 'Outras ▾');
+    mais.type = 'button';
+    mais.id = 'chip-mais';
+    $('chips-tipo').appendChild(mais);
+    CLASSIFICACOES.slice(PRINCIPAIS).forEach(t => $('chips-outras').appendChild(chip(t)));
   }
 
   // ---------- cadastro / PIN ----------
@@ -263,18 +266,27 @@
     }
   }
 
-  // ---------- lista do mês ----------
-  const doMes = (a, m) => estado.gastos.filter(g => g.data && mesDoGasto(g) === chaveMes(a, m));
+  // ---------- lista do período ----------
   const ordenar = (lista, desc) => lista.slice().sort((x, y) =>
     (x.data === y.data ? (x.criadoEm || '').localeCompare(y.criadoEm || '') : x.data.localeCompare(y.data)) * (desc ? -1 : 1));
 
   function renderLista() {
-    const gastos = ordenar(doMes(estado.ano, estado.mes), true);
+    const gastos = ordenar(doPeriodo(), true);
     const total = gastos.reduce((s, g) => s + g.valor, 0);
-    $('mes-nome').textContent = nomeMes(estado.ano, estado.mes);
-    const resumo = $('mes-resumo');
-    resumo.textContent = `${gastos.length} ${gastos.length === 1 ? 'recibo' : 'recibos'} · Total `;
+    $('per-texto').textContent = `${dataBR(estado.periodo.de)} → ${dataBR(estado.periodo.ate)}`;
+    const padrao = periodoPadrao();
+    $('per-atual').hidden = estado.periodo.de === padrao.de && estado.periodo.ate === padrao.ate;
+    const resumo = $('per-resumo');
+    resumo.textContent = `${plural(gastos.length, 'recibo', 'recibos')} · Total `;
     resumo.appendChild(el('strong', '', moeda(total)));
+
+    // recibos ainda não enviados que ficaram fora do período escolhido
+    const fora = naoEnviadosFora();
+    const aviso = $('per-aviso');
+    aviso.hidden = !fora.length;
+    if (fora.length) {
+      aviso.textContent = `⚠ ${plural(fora.length, 'recibo não enviado está', 'recibos não enviados estão')} fora deste período. Toque para incluir.`;
+    }
 
     const ul = $('lista');
     ul.textContent = '';
@@ -291,9 +303,9 @@
       }
       const meio = el('div', 'item-meio');
       meio.appendChild(el('div', 'item-desc', g.descricao || g.subclassificacao || 'Despesa'));
-      const dataTxt = g.data.slice(0, 7) === chaveMes(estado.ano, estado.mes) ? dataBR(g.data).slice(0, 5) : dataBR(g.data);
-      const info = el('div', 'item-info', `${dataTxt} · ${g.subclassificacao || ''}`);
-      if (!g.subclassificacao) info.appendChild(el('span', 'tag-aviso', 'sem tipo'));
+      const info = el('div', 'item-info', `${dataBR(g.data).slice(0, 5)} · ${g.subclassificacao || ''}`);
+      if (!g.subclassificacao) info.appendChild(el('span', 'tag-aviso', 'sem classificação'));
+      if (g.enviadoEm) info.appendChild(el('span', 'tag-enviado', ' · ✓ enviado'));
       meio.appendChild(info);
       li.appendChild(meio);
       li.appendChild(el('div', 'item-valor', moeda(g.valor)));
@@ -304,12 +316,119 @@
     $('lista-vazia').hidden = gastos.length > 0;
   }
 
-  function mudarMes(delta) {
-    let m = estado.mes + delta, a = estado.ano;
-    if (m < 1) { m = 12; a--; }
-    if (m > 12) { m = 1; a++; }
-    estado.mes = m;
-    estado.ano = a;
+  // ---------- calendário para escolher o período ----------
+  // 1º toque marca o início, 2º toque o fim; um novo toque recomeça a seleção.
+  const cal = { de: '', ate: '' };
+
+  function abrirCalendario() {
+    cal.de = estado.periodo.de;
+    cal.ate = estado.periodo.ate;
+    montarCalendario();
+    $('calendario').hidden = false;
+    history.pushState({ calendario: true }, '');
+    const alvo = document.querySelector(`.cal-mes[data-mes="${cal.de.slice(0, 7)}"]`);
+    if (alvo) alvo.scrollIntoView({ block: 'start' });
+  }
+
+  function montarCalendario() {
+    const box = $('cal-meses');
+    box.textContent = '';
+    const hoje = new Date();
+    const hojeIso = isoLocal(hoje);
+    // do mês do recibo mais antigo (ou 12 meses atrás) até o mês atual
+    const antigo = estado.gastos.reduce((m, g) => (g.data < m ? g.data : m), isoLocal(new Date(hoje.getFullYear(), hoje.getMonth() - 12, 1)));
+    let mes = new Date(+antigo.slice(0, 4), +antigo.slice(5, 7) - 1, 1);
+    const ultimo = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    const comRecibo = new Set(estado.gastos.map(g => g.data));
+    while (mes <= ultimo) {
+      const a = mes.getFullYear(), m = mes.getMonth() + 1;
+      const sec = el('section', 'cal-mes');
+      sec.dataset.mes = `${a}-${pad(m)}`;
+      sec.appendChild(el('h3', 'cal-mes-nome', nomeMes(a, m)));
+      const grade = el('div', 'cal-grade');
+      for (let i = 0; i < mes.getDay(); i++) grade.appendChild(el('div'));
+      const dias = new Date(a, m, 0).getDate();
+      for (let d = 1; d <= dias; d++) {
+        const iso = `${a}-${pad(m)}-${pad(d)}`;
+        const b = el('button', 'cal-dia');
+        b.type = 'button';
+        b.dataset.iso = iso;
+        b.appendChild(el('span', '', String(d)));
+        if (iso === hojeIso) b.classList.add('hoje');
+        if (iso > hojeIso) b.classList.add('futuro');
+        if (comRecibo.has(iso)) b.classList.add('com-recibo');
+        grade.appendChild(b);
+      }
+      sec.appendChild(grade);
+      box.appendChild(sec);
+      mes = new Date(a, m, 1);
+    }
+    marcarSelecao();
+  }
+
+  function marcarSelecao() {
+    for (const b of document.querySelectorAll('#cal-meses .cal-dia')) {
+      const iso = b.dataset.iso;
+      b.classList.toggle('inicio', iso === cal.de);
+      b.classList.toggle('fim', !!cal.ate && iso === cal.ate);
+      b.classList.toggle('meio', !!cal.ate && iso > cal.de && iso < cal.ate);
+      b.classList.toggle('com-fim', !!cal.ate && cal.ate !== cal.de);
+      b.classList.toggle('com-inicio', !!cal.ate && cal.ate !== cal.de);
+    }
+    const resumo = $('cal-resumo');
+    if (!cal.de) {
+      resumo.textContent = 'Toque no primeiro dia do período';
+    } else if (!cal.ate) {
+      resumo.textContent = `Início: ${dataBR(cal.de)} — agora toque no último dia`;
+    } else {
+      const gastos = estado.gastos.filter(g => g.data >= cal.de && g.data <= cal.ate);
+      const total = gastos.reduce((t, g) => t + g.valor, 0);
+      resumo.textContent = `${dataBR(cal.de)} a ${dataBR(cal.ate)} · ${plural(gastos.length, 'recibo', 'recibos')} · ${moeda(total)}`;
+    }
+    $('cal-aplicar').disabled = !cal.de;
+  }
+
+  function tocarDia(iso) {
+    if (!cal.de || cal.ate) {
+      cal.de = iso;
+      cal.ate = '';
+    } else if (iso < cal.de) {
+      cal.de = iso;
+    } else {
+      cal.ate = iso;
+    }
+    marcarSelecao();
+  }
+
+  function atalhoPeriodo(qual) {
+    const atual = periodoPadrao();
+    if (qual === 'atual') {
+      Object.assign(cal, atual);
+    } else if (qual === 'anterior') {
+      // ciclo anterior: do dia 20 do mês antes do ciclo atual até a véspera do ciclo atual
+      const [a, m] = atual.de.split('-').map(Number);
+      cal.de = isoLocal(new Date(a, m - 2, DIA_DE_CORTE));
+      cal.ate = isoLocal(new Date(a, m - 1, DIA_DE_CORTE - 1));
+    } else {
+      const datas = estado.gastos.map(g => g.data).sort();
+      cal.de = datas.length ? datas[0] : atual.de;
+      cal.ate = datas.length && datas[datas.length - 1] > atual.ate ? datas[datas.length - 1] : atual.ate;
+    }
+    marcarSelecao();
+    const alvo = document.querySelector(`.cal-mes[data-mes="${cal.de.slice(0, 7)}"]`);
+    if (alvo) alvo.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+
+  function aplicarCalendario() {
+    if (!cal.de) return;
+    estado.periodo = { de: cal.de, ate: cal.ate || cal.de };
+    history.back(); // fecha o calendário
+    renderLista();
+  }
+
+  function incluirForaDoPeriodo() {
+    const datas = naoEnviadosFora().map(g => g.data).concat([estado.periodo.de, estado.periodo.ate]).sort();
+    estado.periodo = { de: datas[0], ate: datas[datas.length - 1] };
     renderLista();
   }
 
@@ -333,9 +452,7 @@
     c.descricao.value = gasto ? gasto.descricao || '' : '';
     c.observacao.value = gasto ? gasto.observacao || '' : '';
     c.link.value = gasto ? gasto.link || '' : '';
-    c.classificacao.value = gasto ? gasto.classificacao || '' : estado.padroes.classificacao || '';
     c.fase.value = gasto ? gasto.fase || '' : estado.padroes.fase || '';
-    preencherMeses(gasto ? mesDoGasto(gasto) : mesPadrao(c.data.value));
     for (const x of $('form-gasto').querySelectorAll('.campo-auto')) x.classList.remove('campo-auto');
     const naFila = !gasto && estado.filaTotal > 0;
     $('gasto-titulo').textContent = gasto ? 'Editar gasto'
@@ -343,46 +460,11 @@
     $('btn-pular').hidden = !naFila;
     $('btn-excluir').hidden = !gasto;
     $('gasto-erro').hidden = true;
+    $('chips-outras').hidden = true;
     esconderLeitura();
     renderChips();
     renderFotos();
     atualizarSugestoes();
-  }
-
-  function preencherMeses(selecionado) {
-    const sel = campos().mes;
-    sel.textContent = '';
-    const h = new Date();
-    const chaves = [];
-    for (let k = 1; k >= -13; k--) {
-      const d = new Date(h.getFullYear(), h.getMonth() + k, 1);
-      chaves.push(chaveMes(d.getFullYear(), d.getMonth() + 1));
-    }
-    if (selecionado && !chaves.includes(selecionado)) chaves.push(selecionado);
-    chaves.sort().reverse();
-    for (const k of chaves) sel.appendChild(new Option(nomeChave(k), k));
-    sel.value = selecionado;
-    atualizarAvisoMes();
-  }
-
-  // Quando a data muda (leitura automática ou digitada), o mês da planilha acompanha, se não foi escolhido à mão
-  function atualizarMesAuto() {
-    const form = estado.form;
-    const c = campos();
-    if (!form || form.tocados.has('mes') || !/^\d{4}-\d{2}-\d{2}$/.test(c.data.value)) return atualizarAvisoMes();
-    preencherMeses(mesPadrao(c.data.value));
-  }
-
-  function atualizarAvisoMes() {
-    const c = campos();
-    const aviso = $('mes-aviso');
-    const doRecibo = (c.data.value || '').slice(0, 7);
-    if (doRecibo.length === 7 && c.mes.value && doRecibo !== c.mes.value) {
-      aviso.textContent = `Recibo de ${nomeChave(doRecibo).toLowerCase()}, lançado na planilha de ${nomeChave(c.mes.value).toLowerCase()}.`;
-      aviso.hidden = false;
-    } else {
-      aviso.hidden = true;
-    }
   }
 
   function fecharForm() {
@@ -399,10 +481,7 @@
     if (arquivo) {
       if (arquivo.lastModified) {
         const d = new Date(arquivo.lastModified);
-        if (d <= new Date()) {
-          campos().data.value = isoLocal(d);
-          atualizarMesAuto();
-        }
+        if (d <= new Date()) campos().data.value = isoLocal(d);
       }
       adicionarFoto(arquivo);
     }
@@ -441,7 +520,13 @@
   }
 
   function renderChips() {
-    for (const b of $('chips-tipo').children) b.setAttribute('aria-pressed', String(b.dataset.tipo === estado.form.tipo));
+    const tipo = estado.form.tipo;
+    for (const b of document.querySelectorAll('#chips-tipo .chip[data-tipo], #chips-outras .chip')) {
+      b.setAttribute('aria-pressed', String(b.dataset.tipo === tipo));
+    }
+    // se a classificação escolhida está entre as "Outras", mostra a lista aberta
+    if (CLASSIFICACOES.indexOf(tipo) >= PRINCIPAIS) $('chips-outras').hidden = false;
+    $('chip-mais').textContent = $('chips-outras').hidden ? 'Outras ▾' : 'Outras ▴';
   }
 
   function renderFotos() {
@@ -583,17 +668,18 @@
     return true;
   }
 
+  // Preenche só: valor, classificação, data, despesa e link da NF (a observação fica para o usuário).
   function aplicarLeitura(r) {
     const form = estado.form;
     const achouValor = preencherAuto('valor', r.valor ? formatarValor(r.valor) : '');
     preencherAuto('data', r.data);
-    atualizarMesAuto();
-    if (r.tipo && !form.tocados.has('tipo')) {
-      form.tipo = r.tipo;
+    // sem pista do tipo, mas a nota foi lida: quase sempre é alimentação
+    const tipo = r.tipo || (r.valor ? 'Alimentação' : '');
+    if (tipo && !form.tocados.has('tipo')) {
+      form.tipo = tipo;
       renderChips();
     }
-    preencherAuto('descricao', r.descricao);
-    preencherAuto('observacao', r.estabelecimento);
+    preencherAuto('descricao', r.descricao || (tipo === 'Alimentação' ? Leitura.refeicaoPorHora(r.hora) : ''));
     preencherAuto('link', r.link);
     if (r.falhouOCR && !r.valor) {
       mostrarLeitura('Não consegui ler o recibo automaticamente. Preencha os campos abaixo.', 'falha');
@@ -624,22 +710,22 @@
     if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) return erroForm('Informe a data do gasto.');
     $('gasto-erro').hidden = true;
     const agora = new Date().toISOString();
+    const o = form.original;
     const gasto = {
       id: form.id || novoId(),
       data,
       valor,
       descricao: c.descricao.value.trim() || form.tipo || 'Despesa',
       observacao: c.observacao.value.trim(),
-      classificacao: c.classificacao.value,
-      subclassificacao: form.tipo,
+      subclassificacao: form.tipo, // a "Classificação" escolhida (vai na coluna Classificação da planilha)
       fase: c.fase.value,
-      mes: c.mes.value || data.slice(0, 7),
       link: c.link.value.trim(),
       fotos: form.fotos.map(f => f.id),
       thumb: form.fotos.length ? form.fotos[0].thumb : '',
-      criadoEm: form.original ? form.original.criadoEm : agora,
+      criadoEm: o ? o.criadoEm : agora,
       atualizadoEm: agora,
     };
+    if (o && o.enviadoEm) gasto.enviadoEm = o.enviadoEm;
     const dup = estado.gastos.find(g => g.id !== gasto.id && g.data === gasto.data && g.valor === gasto.valor);
     if (dup && !(await confirmar(`Já existe um gasto de ${moeda(dup.valor)} em ${dataBR(dup.data)} ("${dup.descricao}").\nSalvar mesmo assim?`, { sim: 'Salvar' }))) return;
     const novas = form.fotos.filter(f => f.novo).map(f => ({ id: f.id, dados: f.dados, w: f.w, h: f.h, tipo: f.tipo, thumb: f.thumb }));
@@ -650,23 +736,19 @@
     }
     const i = estado.gastos.findIndex(g => g.id === gasto.id);
     if (i >= 0) estado.gastos[i] = gasto; else estado.gastos.push(gasto);
-    // lembra Classificação/Fase do último gasto novo para pré-preencher os próximos
-    if (!form.original && (gasto.classificacao !== estado.padroes.classificacao || gasto.fase !== estado.padroes.fase)) {
-      estado.padroes = { classificacao: gasto.classificacao, fase: gasto.fase };
+    // lembra a Fase do último gasto novo para pré-preencher os próximos
+    if (!o && gasto.fase !== estado.padroes.fase) {
+      estado.padroes = { fase: gasto.fase };
       DB.gravarConfig('padroes', estado.padroes).catch(() => {});
     }
-    const [a, m] = gasto.mes.split('-').map(Number);
     fecharForm();
-    // durante a fila o mês da tela não muda, para todas as fotos seguirem a mesma regra de mês
+    const fora = !noPeriodo(gasto);
     if (estado.filaTotal && proximoDaFila()) {
-      toast(`Salvo na planilha de ${nomeMes(a, m)} ✓ Próximo recibo`);
+      toast(fora ? 'Salvo (data fora do período mostrado) ✓ Próximo recibo' : 'Gasto salvo ✓ Próximo recibo');
       return;
     }
-    const outroMes = a !== estado.ano || m !== estado.mes;
-    estado.ano = a;
-    estado.mes = m;
     history.back();
-    toast(outroMes ? `Gasto salvo na planilha de ${nomeMes(a, m)}` : 'Gasto salvo ✓');
+    toast(fora ? `Gasto salvo. A data ${dataBR(gasto.data)} está fora do período mostrado.` : 'Gasto salvo ✓');
   }
 
   async function excluirGasto() {
@@ -693,21 +775,22 @@
 
   // ---------- exportar ----------
   function abrirExportar() {
-    const gastos = doMes(estado.ano, estado.mes);
+    const gastos = doPeriodo();
     const total = gastos.reduce((s, g) => s + g.valor, 0);
-    $('exp-mes').textContent = nomeMes(estado.ano, estado.mes);
-    $('exp-resumo').textContent = `${gastos.length} ${gastos.length === 1 ? 'gasto' : 'gastos'} · Total ${moeda(total)}`;
+    const prazo = prazoDoPeriodo();
+    $('exp-mes').textContent = textoPeriodo();
+    $('exp-resumo').textContent = `${plural(gastos.length, 'gasto', 'gastos')} · Total ${moeda(total)} · Planilha de ${nomeMes(prazo.ano, prazo.mes).toLowerCase()}`;
     const avisos = $('exp-avisos');
     avisos.textContent = '';
     const semFoto = gastos.filter(g => !(g.fotos || []).length).length;
     const semTipo = gastos.filter(g => !g.subclassificacao).length;
-    if (semFoto) avisos.appendChild(el('li', '', `${semFoto} ${semFoto === 1 ? 'gasto está' : 'gastos estão'} sem foto do recibo.`));
-    if (semTipo) avisos.appendChild(el('li', '', `${semTipo} ${semTipo === 1 ? 'gasto está' : 'gastos estão'} sem tipo de custo.`));
-    const atrasados = gastos.filter(g => g.data.slice(0, 7) !== chaveMes(estado.ano, estado.mes)).length;
-    if (atrasados) avisos.appendChild(el('li', 'info', `${atrasados} ${atrasados === 1 ? 'recibo é' : 'recibos são'} de outro mês e ${atrasados === 1 ? 'entra' : 'entram'} nesta planilha com a data original.`));
-    const prazoM = estado.mes === 12 ? 1 : estado.mes + 1;
-    const prazoA = estado.mes === 12 ? estado.ano + 1 : estado.ano;
-    avisos.appendChild(el('li', 'info', `Prazo de envio: até 20/${pad(prazoM)}/${prazoA}, por e-mail, com a planilha e os recibos em PDF.`));
+    const enviados = gastos.filter(g => g.enviadoEm).length;
+    const fora = naoEnviadosFora().length;
+    if (semFoto) avisos.appendChild(el('li', '', `${plural(semFoto, 'gasto está', 'gastos estão')} sem foto do recibo.`));
+    if (semTipo) avisos.appendChild(el('li', '', `${plural(semTipo, 'gasto está', 'gastos estão')} sem classificação.`));
+    if (enviados) avisos.appendChild(el('li', '', `${plural(enviados, 'gasto deste período já foi marcado', 'gastos deste período já foram marcados')} como enviado.`));
+    if (fora) avisos.appendChild(el('li', '', `${plural(fora, 'recibo não enviado ficou', 'recibos não enviados ficaram')} fora deste período (veja na tela anterior).`));
+    avisos.appendChild(el('li', 'info', `Prazo de envio: até ${dataBR(prazo.dia)}, por e-mail, com a planilha e os recibos em PDF.`));
     $('btn-gerar').disabled = gastos.length === 0;
     $('btn-limpar-mes').hidden = gastos.length === 0;
     $('exp-arquivos').hidden = true;
@@ -720,16 +803,16 @@
   };
 
   async function gerarArquivos() {
-    const { ano, mes } = estado;
-    const gastos = ordenar(doMes(ano, mes), false);
+    const gastos = ordenar(doPeriodo(), false);
     if (!gastos.length) return;
+    const prazo = prazoDoPeriodo();
     try {
       ocupado('Gerando a planilha…');
-      const xlsx = await Exportar.gerarPlanilha(estado.perfil, ano, mes, gastos);
+      const xlsx = await Exportar.gerarPlanilha(estado.perfil, prazo.ano, prazo.mes, gastos);
       ocupado('Montando o PDF dos recibos…');
-      const pdf = await Exportar.gerarPDF(estado.perfil, nomeMes(ano, mes), gastos, id => DB.obter('fotos', id),
+      const pdf = await Exportar.gerarPDF(estado.perfil, 'Período ' + textoPeriodo(), gastos, id => DB.obter('fotos', id),
         (k, n) => ocupado(`Montando o PDF dos recibos… ${k}/${n}`));
-      const sufixo = `${pad(mes)}${ano}`;
+      const sufixo = `${pad(prazo.mes)}${prazo.ano}`;
       estado.arquivos = {
         xlsx: new File([xlsx], `Planilha_reembolso_${sufixo}.xlsx`, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
         pdf: new File([pdf], `Recibos_reembolso_${sufixo}.pdf`, { type: 'application/pdf' }),
@@ -739,6 +822,7 @@
       $('arq-xlsx-comp').hidden = !podeCompartilhar([estado.arquivos.xlsx]);
       $('arq-pdf-comp').hidden = !podeCompartilhar([estado.arquivos.pdf]);
       $('arq-ambos-comp').hidden = !podeCompartilhar([estado.arquivos.xlsx, estado.arquivos.pdf]);
+      atualizarBotaoEnviados();
       $('exp-arquivos').hidden = false;
       $('exp-arquivos').scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (e) {
@@ -747,6 +831,25 @@
     } finally {
       livre();
     }
+  }
+
+  function atualizarBotaoEnviados() {
+    const pendentes = doPeriodo().filter(g => !g.enviadoEm).length;
+    $('exp-enviar').hidden = !pendentes;
+    $('btn-marcar-enviados').textContent = `Marcar ${plural(pendentes, 'recibo', 'recibos')} como ${pendentes === 1 ? 'enviado' : 'enviados'}`;
+  }
+
+  async function marcarEnviados() {
+    const pendentes = doPeriodo().filter(g => !g.enviadoEm);
+    if (!pendentes.length) return;
+    if (!(await confirmar(`Marcar ${plural(pendentes.length, 'recibo', 'recibos')} do período ${textoPeriodo()} como ${pendentes.length === 1 ? 'enviado' : 'enviados'}?\nFaça isso depois de mandar o e-mail.`, { sim: 'Marcar' }))) return;
+    const hoje = isoLocal(new Date());
+    const atualizados = pendentes.map(g => Object.assign({}, g, { enviadoEm: hoje }));
+    await DB.gravarGastos(atualizados);
+    const porId = new Map(atualizados.map(g => [g.id, g]));
+    estado.gastos = estado.gastos.map(g => porId.get(g.id) || g);
+    atualizarBotaoEnviados();
+    toast('Recibos marcados como enviados ✓');
   }
 
   function baixar(arquivo) {
@@ -763,22 +866,22 @@
 
   async function compartilhar(arquivos) {
     try {
-      await navigator.share({ files: arquivos, title: 'Reembolso ' + nomeMes(estado.ano, estado.mes) });
+      await navigator.share({ files: arquivos, title: 'Reembolso ' + textoPeriodo() });
     } catch (e) {
       if (e && e.name !== 'AbortError') avisar('Não foi possível compartilhar. Use o botão Baixar.');
     }
   }
 
-  async function limparMes() {
-    const gastos = doMes(estado.ano, estado.mes);
+  async function limparPeriodo() {
+    const gastos = doPeriodo();
     if (!gastos.length) return;
-    const ok = await confirmar(`Excluir os ${gastos.length} gastos de ${nomeMes(estado.ano, estado.mes)} e suas fotos?\n\nFaça isso só depois de enviar a planilha. Não dá para desfazer.`, { sim: 'Excluir tudo' });
+    const ok = await confirmar(`Excluir os ${gastos.length} gastos de ${textoPeriodo()} e suas fotos?\n\nFaça isso só depois de enviar a planilha. Não dá para desfazer.`, { sim: 'Excluir tudo' });
     if (!ok) return;
     await DB.excluirGastos(gastos);
     const ids = new Set(gastos.map(g => g.id));
     estado.gastos = estado.gastos.filter(g => !ids.has(g.id));
     history.back();
-    toast('Gastos do mês excluídos');
+    toast('Gastos do período excluídos');
   }
 
   // ---------- ajustes ----------
@@ -786,7 +889,6 @@
     const f = $('form-ajustes');
     f.nome.value = estado.perfil.nome;
     f.pix.value = estado.perfil.pix;
-    f.classificacao.value = estado.padroes.classificacao || '';
     f.fase.value = estado.padroes.fase || '';
     f.pin.value = '';
     f.semPin.checked = !!estado.perfil.semPin || !estado.perfil.pinHash;
@@ -808,7 +910,7 @@
     }
     p.semPin = f.semPin.checked || !p.pinHash;
     estado.perfil = p;
-    estado.padroes = { classificacao: f.classificacao.value, fase: f.fase.value };
+    estado.padroes = { fase: f.fase.value };
     await DB.gravarConfig('perfil', p);
     await DB.gravarConfig('padroes', estado.padroes);
     history.back();
@@ -886,8 +988,16 @@
     $('form-cadastro').addEventListener('submit', salvarCadastro);
     $('form-pin').addEventListener('submit', conferirPIN);
     $('pin-esqueci').addEventListener('click', esqueciPIN);
-    $('mes-ant').addEventListener('click', () => mudarMes(-1));
-    $('mes-prox').addEventListener('click', () => mudarMes(1));
+    $('per-botao').addEventListener('click', abrirCalendario);
+    $('cal-fechar').addEventListener('click', () => history.back());
+    $('cal-aplicar').addEventListener('click', aplicarCalendario);
+    $('cal-meses').addEventListener('click', ev => {
+      const b = ev.target.closest('.cal-dia');
+      if (b) tocarDia(b.dataset.iso);
+    });
+    for (const b of document.querySelectorAll('.cal-atalhos .chip')) b.addEventListener('click', () => atalhoPeriodo(b.dataset.atalho));
+    $('per-atual').addEventListener('click', () => { estado.periodo = periodoPadrao(); renderLista(); });
+    $('per-aviso').addEventListener('click', incluirForaDoPeriodo);
     $('btn-camera').addEventListener('click', () => escolherFoto('novo', 'in-camera'));
     $('btn-galeria').addEventListener('click', () => escolherFoto('novo', 'in-galeria'));
     $('btn-sem-foto').addEventListener('click', () => abrirFormNovo(null));
@@ -904,8 +1014,6 @@
       estado.form.tocados.add(ev.target.name);
       estado.form.alterado = true;
       ev.target.classList.remove('campo-auto');
-      if (ev.target.name === 'data') atualizarMesAuto();
-      if (ev.target.name === 'mes') atualizarAvisoMes();
     });
     fg.addEventListener('change', ev => {
       if (!estado.form || !ev.target.name) return;
@@ -916,14 +1024,20 @@
       const v = lerValor(fg.elements.valor.value);
       if (v) fg.elements.valor.value = formatarValor(v);
     });
-    $('chips-tipo').addEventListener('click', ev => {
+    const aoTocarChip = ev => {
       const b = ev.target.closest('.chip');
       if (!b || !estado.form) return;
+      if (b.id === 'chip-mais') {
+        $('chips-outras').hidden = !$('chips-outras').hidden;
+        return renderChips();
+      }
       estado.form.tipo = estado.form.tipo === b.dataset.tipo ? '' : b.dataset.tipo;
       estado.form.tocados.add('tipo');
       estado.form.alterado = true;
       renderChips();
-    });
+    };
+    $('chips-tipo').addEventListener('click', aoTocarChip);
+    $('chips-outras').addEventListener('click', aoTocarChip);
     $('btn-excluir').addEventListener('click', excluirGasto);
     $('btn-pular').addEventListener('click', pularFoto);
 
@@ -933,7 +1047,8 @@
     $('arq-xlsx-comp').addEventListener('click', () => estado.arquivos && compartilhar([estado.arquivos.xlsx]));
     $('arq-pdf-comp').addEventListener('click', () => estado.arquivos && compartilhar([estado.arquivos.pdf]));
     $('arq-ambos-comp').addEventListener('click', () => estado.arquivos && compartilhar([estado.arquivos.xlsx, estado.arquivos.pdf]));
-    $('btn-limpar-mes').addEventListener('click', limparMes);
+    $('btn-marcar-enviados').addEventListener('click', marcarEnviados);
+    $('btn-limpar-mes').addEventListener('click', limparPeriodo);
 
     const fa = $('form-ajustes');
     fa.addEventListener('submit', salvarAjustes);

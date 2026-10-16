@@ -43,8 +43,10 @@ const Exportar = (() => {
       linhas.push(`<row r="${r}" ${L}>` +
         celTexto(`B${r}`, 7, g.descricao) +
         celTexto(`C${r}`, 7, g.observacao) +
-        celTexto(`D${r}`, 7, g.classificacao) +
-        celTexto(`E${r}`, 7, g.subclassificacao) +
+        // a classificação escolhida no app (Alimentação, Transporte...) vai na coluna Classificação;
+        // Subclassificação fica vazia
+        celTexto(`D${r}`, 7, g.subclassificacao) +
+        celTexto(`E${r}`, 7, '') +
         celTexto(`F${r}`, 7, g.fase) +
         celNum(`G${r}`, 14, serialExcel(g.data)) +
         celNum(`H${r}`, 12, (g.valor / 100).toFixed(2).replace(/\.?0+$/, '')) +
@@ -71,32 +73,35 @@ const Exportar = (() => {
     const { xml, ultima, linhaTotal, links } = montarLinhas(perfil, ano, mes, gastos);
 
     let folha = await zip.file('xl/worksheets/sheet1.xml').async('string');
-    folha = folha.replace(/<sheetData>[\s\S]*<\/sheetData>|<sheetData\/>/, `<sheetData>${xml}</sheetData>`);
+    // substituições com função: o texto do usuário pode conter '$', que no replace com texto teria significado especial
+    folha = folha.replace(/<sheetData>[\s\S]*<\/sheetData>|<sheetData\/>/, () => `<sheetData>${xml}</sheetData>`);
     folha = folha.replace(/<dimension ref="[^"]*"\/>/, `<dimension ref="B1:I${linhaTotal}"/>`);
     folha = folha.replace(/<autoFilter ref="[^"]*"/, `<autoFilter ref="B6:I${ultima}"`);
     folha = folha.replace(/<xm:sqref>([DEF])\d+:[DEF]\d+<\/xm:sqref>/g, `<xm:sqref>$1${LINHA_INICIAL}:$1${ultima}</xm:sqref>`);
+    // lista suspensa da coluna Classificação passa a oferecer Alimentação, Transporte, Hospedagem...
+    folha = folha.replace('<xm:f>Folha2!$A$2:$A$6</xm:f>', () => '<xm:f>Folha2!$A$9:$A$19</xm:f>');
     folha = folha.replace(/<hyperlinks>[\s\S]*?<\/hyperlinks>/, '');
 
     let rels = await zip.file('xl/worksheets/_rels/sheet1.xml.rels').async('string');
     rels = rels.replace(/<Relationship Id="rIdNF\d+"[^>]*\/>/g, '');
     if (links.length) {
       const hl = links.map((l, i) => `<hyperlink ref="${l.ref}" r:id="rIdNF${i + 1}"/>`).join('');
-      folha = folha.replace('<pageMargins', `<hyperlinks>${hl}</hyperlinks><pageMargins`);
+      folha = folha.replace('<pageMargins', () => `<hyperlinks>${hl}</hyperlinks><pageMargins`);
       const novas = links.map((l, i) =>
         `<Relationship Id="rIdNF${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${esc(l.url)}" TargetMode="External"/>`).join('');
-      rels = rels.replace('</Relationships>', novas + '</Relationships>');
+      rels = rels.replace('</Relationships>', () => novas + '</Relationships>');
     }
     zip.file('xl/worksheets/sheet1.xml', folha, SEM_PASTAS);
     zip.file('xl/worksheets/_rels/sheet1.xml.rels', rels, SEM_PASTAS);
 
     let wb = await zip.file('xl/workbook.xml').async('string');
-    wb = wb.replace(/\$B\$6:\$I\$\d+/, `$B$6:$I$${ultima}`);
+    wb = wb.replace(/\$B\$6:\$I\$\d+/, () => `$B$6:$I$${ultima}`);
     zip.file('xl/workbook.xml', wb, SEM_PASTAS);
 
     const agora = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
     let core = await zip.file('docProps/core.xml').async('string');
-    core = core.replace(/(<dcterms:modified[^>]*>)[^<]*/, `$1${agora}`)
-      .replace(/<cp:lastModifiedBy>[^<]*/, `<cp:lastModifiedBy>${esc(perfil.nome || 'App Reembolso')}`);
+    core = core.replace(/(<dcterms:modified[^>]*>)[^<]*/, (_, abre) => abre + agora)
+      .replace(/<cp:lastModifiedBy>[^<]*/, () => `<cp:lastModifiedBy>${esc(perfil.nome || 'App Reembolso')}`);
     zip.file('docProps/core.xml', core, SEM_PASTAS);
 
     return zip.generateAsync({

@@ -484,12 +484,40 @@ const Leitura = (() => {
 
   function extrairHora(norm, linhaData) {
     const re = /\b([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?\b/;
-    const ordem = linhaData != null ? [linhaData].concat(norm.map((_, i) => i).filter(i => i !== linhaData)) : norm.map((_, i) => i);
-    for (const i of ordem) {
-      const m = norm[i].match(re);
+    // na linha da data o OCR às vezes troca ":" por "." (09.26): aceita, depois de tirar a própria data
+    if (linhaData != null) {
+      const semData = norm[linhaData].replace(/\d{1,2}\s?[\/.-]\s?\d{1,2}\s?[\/.-]\s?\d{2,4}/g, ' ');
+      const m = semData.match(/\b([01]?\d|2[0-3])[:.]([0-5]\d)\b/);
+      if (m) return `${doisDig(m[1])}:${m[2]}`;
+    }
+    for (const n of norm) {
+      const m = n.match(re);
       if (m) return `${doisDig(m[1])}:${m[2]}`;
     }
     return null;
+  }
+
+  // Chave de acesso impressa na NFC-e (44 dígitos em grupos de 4): os dígitos 3 a 6 são ano e mês da emissão.
+  function anoMesDaChave(linhas) {
+    for (const l of linhas) {
+      const m = l.match(/(?:\d{4}\s*){10}\d{4}/);
+      if (!m) continue;
+      const dig = m[0].replace(/\s/g, '');
+      const ano = 2000 + parseInt(dig.slice(2, 4), 10), mes = parseInt(dig.slice(4, 6), 10);
+      if (mes >= 1 && mes <= 12 && ano >= 2015) return { ano, mes };
+    }
+    return null;
+  }
+
+  // Se o mês/ano da data lida não bate com a chave de acesso (ex.: OCR leu 26/08 em vez de 26/09),
+  // mantém o dia e corrige mês e ano pela chave.
+  function conferirComChave(dataIso, chave, hoje) {
+    if (!dataIso || !chave) return dataIso;
+    const [a, m, d] = dataIso.split('-').map(Number);
+    if (a === chave.ano && m === chave.mes) return dataIso;
+    const corrigida = new Date(chave.ano, chave.mes - 1, d);
+    if (corrigida.getMonth() !== chave.mes - 1 || corrigida > new Date(hoje.getTime() + 2 * 86400000)) return dataIso;
+    return `${chave.ano}-${doisDig(chave.mes)}-${doisDig(d)}`;
   }
 
   const NAO_NOME = /CNPJ|CPF|\bI\.?E\b|INSC|DOCUMENTO|AUXILIAR|NFC|NOTA\s*FISCAL|CUPOM|ELETRONIC|CONSUMIDOR|DANFE|EXTRATO|\bSAT\b|ENDERECO|\bRUA\b|\bR\.\s|\bAV\b|AVENIDA|RODOVIA|ESTRADA|\bTEL|FONE|\bCEP\b|BAIRRO|CAIXA|OPERADOR|PROTOCOLO|CHAVE|EMISSAO|RECIBO|COMPROVANTE|\bVIA\b|CONSULTA|HTTP|WWW|SEFAZ|FAZENDA/;
@@ -525,7 +553,7 @@ const Leitura = (() => {
 
   // Palavras-chave por Subclassificação (lista da empresa)
   const PALAVRAS = {
-    'Alimentação': /RESTAUR|LANCHONETE|LANCHE|PADARIA|PANIFIC|CONFEITARIA|PIZZ|CHURRASC|CAFETERIA|\bCAFE\b|\bBAR\b|BOTEQU|BOTECO|REFEIC|ALMOCO|JANTA|MARMIT|SELF.?SERVICE|BUFFET|\bPRATO|\bPF\b|SUCO|REFRIGERANTE|\bREFRI\b|AGUA MINERAL|CERVEJA|SALGADO|PASTEL|HAMBURG|BURGER|SANDUICHE|ACAI|SORVET|SUPERMERCADO|MERCADO|MERCEARIA|HORTIFRUTI|ACOUGUE|ALIMENTOS|IFOOD|MC ?DONALD|SUBWAY|ESFIHA|TAPIOCA|COXINHA|CHOPP|BEBIDA|COMIDA|CULINARIA|GASTRONOMIA|SUSHI|TEMAKI|GRILL|CANTINA|BISTRO|DOCERIA|COCA.?COLA|GUARANA|EMPADA|QUENTINHA/g,
+    'Alimentação': /RESTAUR|QUEIJ|\bBROA|\bBOLO|\bPAO\b|\bPAES\b|\bOVOS?\b|\bLEITE|SALGAD|BISCOITO|QUITAND|\bKILO\b|\bQUILO\b|\bPASTEIS\b|PANQUECA|OMELETE|SOBREMESA|SALADA|\bSOPA\b|FEIJAO|\bARROZ|FRANGO|\bCARNE|PEIXE|LASANHA|MACARRAO|\bWRAP|\bSUCOS?\b|CAPUCCINO|CAPPUCCINO|ESPRESSO|LANCHONETE|LANCHE|PADARIA|PANIFIC|CONFEITARIA|PIZZ|CHURRASC|CAFETERIA|\bCAFE\b|\bBAR\b|BOTEQU|BOTECO|REFEIC|ALMOCO|JANTA|MARMIT|SELF.?SERVICE|BUFFET|\bPRATO|\bPF\b|SUCO|REFRIGERANTE|\bREFRI\b|AGUA MINERAL|CERVEJA|SALGADO|PASTEL|HAMBURG|BURGER|SANDUICHE|ACAI|SORVET|SUPERMERCADO|MERCADO|MERCEARIA|HORTIFRUTI|ACOUGUE|ALIMENTOS|IFOOD|MC ?DONALD|SUBWAY|ESFIHA|TAPIOCA|COXINHA|CHOPP|BEBIDA|COMIDA|CULINARIA|GASTRONOMIA|SUSHI|TEMAKI|GRILL|CANTINA|BISTRO|DOCERIA|COCA.?COLA|GUARANA|EMPADA|QUENTINHA/g,
     'Transporte': /UBER|\b99\s?(POP|TAXI|APP|COMFORT)|99APP|\bTAXI|CABIFY|INDRIVE|\bPOSTO\b|COMBUST|GASOLINA|ETANOL|DIESEL|\bGNV\b|ESTACIONA|ESTAPAR|PEDAGIO|SEM PARAR|CONECTCAR|RODOVIARIA|PASSAGE|ONIBUS|VIACAO|EXPRESSO|TRANSPORT|\bMETRO\b|\bBRT\b|BILHETE|AEROPORTO|EMBARQUE|LATAM|GOL LINHAS|AZUL LINHAS|LOCADORA|LOCALIZA|MOVIDA|UNIDAS|CORRIDA|VIAGEM|MOTORISTA|\bBARCA|LITRO|\bKM\b/g,
     'Hospedagem': /HOTEL|POUSADA|HOSTEL|HOSPEDA|\bDIARIA|AIRBNB|BOOKING|\bINN\b|\bFLAT\b|CHALE|CHECK.?IN|CHECK.?OUT|\bAPART/g,
     'EPI': /\bEPI\b|\bLUVA|\bBOTA\b|BOTINA|CAPACETE|PERNEIRA|OCULOS DE (PROTECAO|SEGURANCA)|PROTETOR (SOLAR|AURICULAR)|REPELENTE|MASCARA|UNIFORME|CAMISA UV|PROTECAO INDIVIDUAL/g,
@@ -547,14 +575,17 @@ const Leitura = (() => {
     return melhor ? melhor.tipo : null;
   }
 
+  // Refeição pela hora do recibo (ou a hora atual, se a nota não tiver hora legível)
+  function refeicaoPorHora(hora) {
+    const h = hora ? parseInt(hora, 10) + parseInt(hora.slice(3), 10) / 60 : new Date().getHours();
+    if (h < 10.5) return 'Café da manhã';
+    if (h < 15.5) return 'Almoço';
+    if (h < 18.5) return 'Lanche';
+    return 'Janta';
+  }
+
   function sugerirDescricao(tipo, tudo, hora) {
-    if (tipo === 'Alimentação') {
-      const h = hora ? parseInt(hora, 10) + parseInt(hora.slice(3), 10) / 60 : new Date().getHours();
-      if (h < 10.5) return 'Café da manhã';
-      if (h < 15.5) return 'Almoço';
-      if (h < 18.5) return 'Lanche';
-      return 'Janta';
-    }
+    if (tipo === 'Alimentação') return refeicaoPorHora(hora);
     if (tipo === 'Transporte') {
       if (/UBER/.test(tudo)) return 'Deslocamento (Uber)';
       if (/\b99\s?(POP|TAXI|APP|COMFORT)|99APP/.test(tudo)) return 'Deslocamento (99)';
@@ -586,7 +617,7 @@ const Leitura = (() => {
     return {
       valor: valor.valor,
       confiante: valor.confiante,
-      data: data ? data.data : null,
+      data: conferirComChave(data ? data.data : null, anoMesDaChave(passes.reduce((acc, x) => acc.concat(x.linhas), [])), hoje),
       hora,
       tipo,
       estabelecimento: extrairEstabelecimento(base.linhas, base.norm, confiavel),
@@ -642,5 +673,5 @@ const Leitura = (() => {
     return r;
   }
 
-  return { carregarImagem, desenhar, canvasParaBlob, analisar, interpretarTexto, interpretarQR, combinar, carregarScript, prepararParaOCR, localizarNota };
+  return { carregarImagem, desenhar, canvasParaBlob, analisar, interpretarTexto, interpretarQR, combinar, carregarScript, refeicaoPorHora };
 })();
