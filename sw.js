@@ -1,6 +1,6 @@
 /* Service worker: guarda o app no celular para funcionar sem internet (inclusive a leitura dos recibos).
    Ao publicar uma nova versão, aumente VERSAO para que os celulares baixem os arquivos novos. */
-const VERSAO = 'v1.0.0';
+const VERSAO = 'v1.2.0';
 const CACHE_APP = 'reembolso-app-' + VERSAO;
 const CACHE_OCR = 'reembolso-ocr-v5.1.1';
 
@@ -38,6 +38,7 @@ function arquivosOCR() {
     'vendor/tesseract/tesseract.min.js',
     'vendor/tesseract/worker.min.js',
     'vendor/tesseract/lang/por.traineddata.gz',
+    'vendor/heic2any.min.js',
     temSIMD() ? 'vendor/tesseract/core/tesseract-core-simd-lstm.wasm.js' : 'vendor/tesseract/core/tesseract-core-lstm.wasm.js',
   ];
 }
@@ -46,7 +47,7 @@ self.addEventListener('install', event => {
   event.waitUntil((async () => {
     const app = await caches.open(CACHE_APP);
     await app.addAll(ARQUIVOS_APP.map(u => new Request(u, { cache: 'reload' })));
-    // OCR é grande (~5 MB): se falhar agora, é baixado na primeira leitura
+    // OCR e conversor HEIC são grandes (~6 MB): se falhar agora, são baixados no primeiro uso
     try {
       const ocr = await caches.open(CACHE_OCR);
       for (const u of arquivosOCR()) {
@@ -76,8 +77,8 @@ self.addEventListener('fetch', event => {
     const emCache = await caches.match(req, { ignoreSearch: true });
     if (emCache) return emCache;
     const resp = await fetch(req);
-    // guarda arquivos do OCR na primeira vez que forem usados
-    if (resp.ok && req.url.includes('/vendor/tesseract/')) {
+    // guarda os arquivos grandes (OCR, conversor HEIC) na primeira vez que forem usados
+    if (resp.ok && req.url.includes('/vendor/')) {
       const copia = resp.clone();
       caches.open(CACHE_OCR).then(c => c.put(req, copia)).catch(() => {});
     }

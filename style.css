@@ -280,6 +280,8 @@ legend { font-size: 14px; font-weight: 600; color: var(--texto2); padding: 0; ma
 .chip[aria-pressed="true"] { background: var(--verde); border-color: var(--verde); color: #fff; }
 @media (prefers-color-scheme: dark) { .chip[aria-pressed="true"] { color: #0e1a0f; } }
 .campo-auto { box-shadow: inset 3px 0 0 var(--verde); }
+.aviso-mes { margin-top: -8px; color: var(--alerta); font-weight: 500; }
+.pular { margin-top: 10px; }
 
 /* Exportar */
 .exp-mes { font-size: 22px; font-weight: 700; }

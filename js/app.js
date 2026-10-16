@@ -1,6 +1,6 @@
 /* App Reembolso: telas, formulário e fluxo principal. */
 (() => {
-  const VERSAO = '1.0.0';
+  const VERSAO = '1.2.0';
   const LISTA1 = ['PDD', 'Plantio (PAI1)', 'Plantio (PAI2)', 'Administrativo', 'Legal'];
   const LISTA2 = ['Alimentação', 'Transporte', 'Hospedagem', 'Insumos', 'Equipamentos', 'EPI', 'Prestação de serviço', 'Plataformas', 'República Reflora', 'Salário', 'VERRA'];
   const LISTA3 = ['Implantação', 'Acompanhamento e manutenção'];
@@ -19,6 +19,8 @@
     form: null,
     arquivos: null,
     destinoFoto: 'novo',
+    fila: [], // fotos da galeria esperando para virar gasto
+    filaTotal: 0,
     atualizando: false,
     sw: null,
   };
@@ -30,6 +32,27 @@
   const moeda = c => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
   const formatarValor = c => (c / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const nomeMes = (a, m) => `${MESES[m - 1].charAt(0).toUpperCase()}${MESES[m - 1].slice(1)} de ${a}`;
+  const chaveMes = (a, m) => `${a}-${pad(m)}`;
+  const nomeChave = k => nomeMes(+k.slice(0, 4), +k.slice(5, 7));
+  const mesDoGasto = g => g.mes || g.data.slice(0, 7);
+
+  // A planilha do mês M vai até o dia 20 do mês seguinte: este é o mês mais antigo ainda "aberto".
+  function mesMaisAntigoAberto() {
+    const h = new Date();
+    let a = h.getFullYear(), m = h.getMonth() + 1;
+    if (h.getDate() <= 20) { m--; if (m < 1) { m = 12; a--; } }
+    return chaveMes(a, m);
+  }
+
+  // Em qual planilha lançar: a do mês do recibo; se o prazo dela já passou (recibo atrasado),
+  // a do mês que está aberto na tela (ou o mês mais antigo ainda no prazo).
+  function mesPadrao(data) {
+    const doRecibo = data.slice(0, 7);
+    const aberto = mesMaisAntigoAberto();
+    if (doRecibo >= aberto) return doRecibo;
+    const naTela = chaveMes(estado.ano, estado.mes);
+    return naTela >= aberto ? naTela : aberto;
+  }
   const novoId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const el = (tag, cls, texto) => {
     const e = document.createElement(tag);
@@ -121,14 +144,19 @@
     if (!$('visor').hidden) { fecharVisor(); return; }
     if (estado.tela === 'gasto' && estado.form && estado.form.alterado) {
       history.pushState({ tela: 'gasto' }, '');
-      if (await confirmar('Sair sem salvar este gasto?', { sim: 'Sair sem salvar', nao: 'Continuar editando' })) {
+      const resto = estado.filaTotal ? estado.fila.length : 0;
+      const msg = resto
+        ? `Sair sem salvar este gasto?\nAs outras ${resto} fotos escolhidas também não serão lançadas.`
+        : 'Sair sem salvar este gasto?';
+      if (await confirmar(msg, { sim: 'Sair sem salvar', nao: 'Continuar editando' })) {
+        limparFila();
         fecharForm();
         history.back();
       }
       return;
     }
     if (['gasto', 'exportar', 'ajustes'].includes(estado.tela)) {
-      if (estado.tela === 'gasto') fecharForm();
+      if (estado.tela === 'gasto') { fecharForm(); limparFila(); }
       mostrar('lista');
       renderLista();
     }
@@ -236,7 +264,7 @@
   }
 
   // ---------- lista do mês ----------
-  const doMes = (a, m) => estado.gastos.filter(g => g.data && g.data.slice(0, 7) === `${a}-${pad(m)}`);
+  const doMes = (a, m) => estado.gastos.filter(g => g.data && mesDoGasto(g) === chaveMes(a, m));
   const ordenar = (lista, desc) => lista.slice().sort((x, y) =>
     (x.data === y.data ? (x.criadoEm || '').localeCompare(y.criadoEm || '') : x.data.localeCompare(y.data)) * (desc ? -1 : 1));
 
@@ -263,7 +291,8 @@
       }
       const meio = el('div', 'item-meio');
       meio.appendChild(el('div', 'item-desc', g.descricao || g.subclassificacao || 'Despesa'));
-      const info = el('div', 'item-info', `${dataBR(g.data).slice(0, 5)} · ${g.subclassificacao || ''}`);
+      const dataTxt = g.data.slice(0, 7) === chaveMes(estado.ano, estado.mes) ? dataBR(g.data).slice(0, 5) : dataBR(g.data);
+      const info = el('div', 'item-info', `${dataTxt} · ${g.subclassificacao || ''}`);
       if (!g.subclassificacao) info.appendChild(el('span', 'tag-aviso', 'sem tipo'));
       meio.appendChild(info);
       li.appendChild(meio);
@@ -306,14 +335,54 @@
     c.link.value = gasto ? gasto.link || '' : '';
     c.classificacao.value = gasto ? gasto.classificacao || '' : estado.padroes.classificacao || '';
     c.fase.value = gasto ? gasto.fase || '' : estado.padroes.fase || '';
+    preencherMeses(gasto ? mesDoGasto(gasto) : mesPadrao(c.data.value));
     for (const x of $('form-gasto').querySelectorAll('.campo-auto')) x.classList.remove('campo-auto');
-    $('gasto-titulo').textContent = gasto ? 'Editar gasto' : 'Novo gasto';
+    const naFila = !gasto && estado.filaTotal > 0;
+    $('gasto-titulo').textContent = gasto ? 'Editar gasto'
+      : naFila ? `Recibo ${estado.filaTotal - estado.fila.length} de ${estado.filaTotal}` : 'Novo gasto';
+    $('btn-pular').hidden = !naFila;
     $('btn-excluir').hidden = !gasto;
     $('gasto-erro').hidden = true;
     esconderLeitura();
     renderChips();
     renderFotos();
     atualizarSugestoes();
+  }
+
+  function preencherMeses(selecionado) {
+    const sel = campos().mes;
+    sel.textContent = '';
+    const h = new Date();
+    const chaves = [];
+    for (let k = 1; k >= -13; k--) {
+      const d = new Date(h.getFullYear(), h.getMonth() + k, 1);
+      chaves.push(chaveMes(d.getFullYear(), d.getMonth() + 1));
+    }
+    if (selecionado && !chaves.includes(selecionado)) chaves.push(selecionado);
+    chaves.sort().reverse();
+    for (const k of chaves) sel.appendChild(new Option(nomeChave(k), k));
+    sel.value = selecionado;
+    atualizarAvisoMes();
+  }
+
+  // Quando a data muda (leitura automática ou digitada), o mês da planilha acompanha, se não foi escolhido à mão
+  function atualizarMesAuto() {
+    const form = estado.form;
+    const c = campos();
+    if (!form || form.tocados.has('mes') || !/^\d{4}-\d{2}-\d{2}$/.test(c.data.value)) return atualizarAvisoMes();
+    preencherMeses(mesPadrao(c.data.value));
+  }
+
+  function atualizarAvisoMes() {
+    const c = campos();
+    const aviso = $('mes-aviso');
+    const doRecibo = (c.data.value || '').slice(0, 7);
+    if (doRecibo.length === 7 && c.mes.value && doRecibo !== c.mes.value) {
+      aviso.textContent = `Recibo de ${nomeChave(doRecibo).toLowerCase()}, lançado na planilha de ${nomeChave(c.mes.value).toLowerCase()}.`;
+      aviso.hidden = false;
+    } else {
+      aviso.hidden = true;
+    }
   }
 
   function fecharForm() {
@@ -323,16 +392,40 @@
     estado.form = null;
   }
 
-  function abrirFormNovo(arquivo) {
+  function abrirFormNovo(arquivo, semHistorico) {
     prepararForm(null, []);
-    abrirSubtela('gasto');
+    if (semHistorico) window.scrollTo(0, 0);
+    else abrirSubtela('gasto');
     if (arquivo) {
       if (arquivo.lastModified) {
         const d = new Date(arquivo.lastModified);
-        if (d <= new Date()) campos().data.value = isoLocal(d);
+        if (d <= new Date()) {
+          campos().data.value = isoLocal(d);
+          atualizarMesAuto();
+        }
       }
       adicionarFoto(arquivo);
     }
+  }
+
+  // Várias fotos escolhidas na galeria: abre uma de cada vez para conferir e salvar
+  function proximoDaFila() {
+    if (!estado.fila.length) {
+      estado.filaTotal = 0;
+      return false;
+    }
+    abrirFormNovo(estado.fila.shift(), true);
+    return true;
+  }
+
+  function limparFila() {
+    estado.fila = [];
+    estado.filaTotal = 0;
+  }
+
+  function pularFoto() {
+    fecharForm();
+    if (!proximoDaFila()) history.back();
   }
 
   async function abrirFormEdicao(id) {
@@ -410,12 +503,18 @@
     inp.click();
   }
 
-  function aoEscolherArquivo(e) {
-    const arquivo = e.target.files && e.target.files[0];
+  async function aoEscolherArquivo(e) {
+    const arquivos = Array.from(e.target.files || []);
     e.target.value = '';
-    if (!arquivo) return;
-    if (estado.destinoFoto === 'form' && estado.form) adicionarFoto(arquivo);
-    else abrirFormNovo(arquivo);
+    if (!arquivos.length) return;
+    if (estado.destinoFoto === 'form' && estado.form) {
+      // fotos extras do mesmo recibo (ex.: cupom comprido)
+      for (const a of arquivos) await adicionarFoto(a);
+      return;
+    }
+    estado.fila = arquivos.slice(1);
+    estado.filaTotal = arquivos.length > 1 ? arquivos.length : 0;
+    abrirFormNovo(arquivos[0]);
   }
 
   function mostrarLeitura(texto, tipo) {
@@ -431,7 +530,7 @@
     mostrarLeitura('Preparando a foto…');
     let carregada;
     try {
-      carregada = await Leitura.carregarImagem(arquivo);
+      carregada = await Leitura.carregarImagem(arquivo, msg => { if (estado.form === form) mostrarLeitura(msg); });
     } catch (e) {
       if (estado.form === form) mostrarLeitura(e.message, 'falha');
       return;
@@ -458,7 +557,8 @@
     } catch (e) {
       if (estado.form === form) mostrarLeitura('Erro ao processar a foto: ' + e.message, 'falha');
     } finally {
-      URL.revokeObjectURL(url);
+      if (url) URL.revokeObjectURL(url);
+      if (img.close) img.close();
     }
   }
 
@@ -466,7 +566,8 @@
     mostrarLeitura('Procurando QR code e valores no recibo…');
     const r = await Leitura.analisar(img, m => {
       if (estado.form !== form) return;
-      if (m.status === 'recognizing text') mostrarLeitura(`Lendo o recibo… ${Math.round((m.progress || 0) * 100)}%`);
+      const pct = Math.round((m.progress || 0) * 100);
+      if (m.status === 'recognizing text') mostrarLeitura(m.passo > 1 ? `Conferindo o valor (2ª leitura)… ${pct}%` : `Lendo o recibo… ${pct}%`);
       else if (/load|initializ/.test(m.status || '')) mostrarLeitura('Preparando a leitura (pode demorar na primeira vez)…');
     });
     if (estado.form !== form) return;
@@ -486,6 +587,7 @@
     const form = estado.form;
     const achouValor = preencherAuto('valor', r.valor ? formatarValor(r.valor) : '');
     preencherAuto('data', r.data);
+    atualizarMesAuto();
     if (r.tipo && !form.tocados.has('tipo')) {
       form.tipo = r.tipo;
       renderChips();
@@ -531,6 +633,7 @@
       classificacao: c.classificacao.value,
       subclassificacao: form.tipo,
       fase: c.fase.value,
+      mes: c.mes.value || data.slice(0, 7),
       link: c.link.value.trim(),
       fotos: form.fotos.map(f => f.id),
       thumb: form.fotos.length ? form.fotos[0].thumb : '',
@@ -552,13 +655,18 @@
       estado.padroes = { classificacao: gasto.classificacao, fase: gasto.fase };
       DB.gravarConfig('padroes', estado.padroes).catch(() => {});
     }
-    const [a, m] = gasto.data.split('-').map(Number);
+    const [a, m] = gasto.mes.split('-').map(Number);
+    fecharForm();
+    // durante a fila o mês da tela não muda, para todas as fotos seguirem a mesma regra de mês
+    if (estado.filaTotal && proximoDaFila()) {
+      toast(`Salvo na planilha de ${nomeMes(a, m)} ✓ Próximo recibo`);
+      return;
+    }
     const outroMes = a !== estado.ano || m !== estado.mes;
     estado.ano = a;
     estado.mes = m;
-    fecharForm();
     history.back();
-    toast(outroMes ? `Gasto salvo em ${nomeMes(a, m)}` : 'Gasto salvo ✓');
+    toast(outroMes ? `Gasto salvo na planilha de ${nomeMes(a, m)}` : 'Gasto salvo ✓');
   }
 
   async function excluirGasto() {
@@ -595,6 +703,8 @@
     const semTipo = gastos.filter(g => !g.subclassificacao).length;
     if (semFoto) avisos.appendChild(el('li', '', `${semFoto} ${semFoto === 1 ? 'gasto está' : 'gastos estão'} sem foto do recibo.`));
     if (semTipo) avisos.appendChild(el('li', '', `${semTipo} ${semTipo === 1 ? 'gasto está' : 'gastos estão'} sem tipo de custo.`));
+    const atrasados = gastos.filter(g => g.data.slice(0, 7) !== chaveMes(estado.ano, estado.mes)).length;
+    if (atrasados) avisos.appendChild(el('li', 'info', `${atrasados} ${atrasados === 1 ? 'recibo é' : 'recibos são'} de outro mês e ${atrasados === 1 ? 'entra' : 'entram'} nesta planilha com a data original.`));
     const prazoM = estado.mes === 12 ? 1 : estado.mes + 1;
     const prazoA = estado.mes === 12 ? estado.ano + 1 : estado.ano;
     avisos.appendChild(el('li', 'info', `Prazo de envio: até 20/${pad(prazoM)}/${prazoA}, por e-mail, com a planilha e os recibos em PDF.`));
@@ -794,6 +904,8 @@
       estado.form.tocados.add(ev.target.name);
       estado.form.alterado = true;
       ev.target.classList.remove('campo-auto');
+      if (ev.target.name === 'data') atualizarMesAuto();
+      if (ev.target.name === 'mes') atualizarAvisoMes();
     });
     fg.addEventListener('change', ev => {
       if (!estado.form || !ev.target.name) return;
@@ -813,6 +925,7 @@
       renderChips();
     });
     $('btn-excluir').addEventListener('click', excluirGasto);
+    $('btn-pular').addEventListener('click', pularFoto);
 
     $('btn-gerar').addEventListener('click', gerarArquivos);
     $('arq-xlsx-baixar').addEventListener('click', () => estado.arquivos && baixar(estado.arquivos.xlsx));

@@ -111,6 +111,10 @@
         <label>Data
           <input name="data" type="date" required>
         </label>
+        <label>Lançar na planilha de
+          <select name="mes"></select>
+        </label>
+        <p id="mes-aviso" class="dica aviso-mes" hidden></p>
         <label>Despesa (descrição)
           <input name="descricao" list="sugestoes-descricao" placeholder="Ex.: Almoço, Deslocamento Casa - Rodoviária">
           <datalist id="sugestoes-descricao"></datalist>
@@ -131,6 +135,7 @@
         </label>
         <p id="gasto-erro" class="erro" hidden></p>
         <button class="btn primario largo grande" type="submit">Salvar gasto</button>
+        <button id="btn-pular" class="btn secundario largo pular" type="button" hidden>Pular esta foto</button>
         <button id="btn-excluir" class="btn perigo largo" type="button" hidden>Excluir gasto</button>
       </form>
     </div>
@@ -245,7 +250,7 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <input id="in-camera" type="file" accept="image/*" capture="environment" hidden>
-  <input id="in-galeria" type="file" accept="image/*" hidden>
+  <input id="in-galeria" type="file" accept="image/*" multiple hidden>
   <input id="in-backup" type="file" accept=".zip,application/zip" hidden>
 
   <script src="vendor/jszip.min.js"></script>

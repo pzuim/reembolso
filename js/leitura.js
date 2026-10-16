@@ -18,18 +18,70 @@ const Leitura = (() => {
   }
 
   // ---------- Imagem ----------
-  function carregarImagem(arquivo) {
+  const dims = img => ({ w: img.naturalWidth || img.width, h: img.naturalHeight || img.height });
+
+  function abrirComImg(blob) {
     return new Promise((resolver, rejeitar) => {
-      const url = URL.createObjectURL(arquivo);
+      const url = URL.createObjectURL(blob);
       const img = new Image();
       img.onload = () => resolver({ img, url });
-      img.onerror = () => { URL.revokeObjectURL(url); rejeitar(new Error('Não foi possível abrir esta imagem. Tente tirar a foto novamente.')); };
+      img.onerror = () => { URL.revokeObjectURL(url); rejeitar(new Error('decodificação falhou')); };
       img.src = url;
     });
   }
 
+  // Fotos HEIC/HEIF (padrão de muitos Android e iPhone) não abrem no Chrome: detecta pelo cabeçalho do arquivo
+  async function ehHEIC(arquivo) {
+    if (/hei[cf]/i.test(arquivo.type) || /\.hei[cf]$/i.test(arquivo.name || '')) return true;
+    const cab = new Uint8Array(await blobParaBuffer(arquivo.slice(0, 64)));
+    const txt = String.fromCharCode.apply(null, cab);
+    if (txt.slice(4, 8) !== 'ftyp') return false;
+    const marca = txt.slice(8, 12);
+    if (/^(heic|heix|hevc|hevx|heim|heis|hevm|hevs)$/.test(marca)) return true;
+    return /^(mif1|msf1)$/.test(marca) && txt.includes('hei') && !txt.includes('avif');
+  }
+
+  function blobParaBuffer(blob) {
+    if (blob.arrayBuffer) return blob.arrayBuffer();
+    return new Promise((resolver, rejeitar) => {
+      const r = new FileReader();
+      r.onload = () => resolver(r.result);
+      r.onerror = () => rejeitar(r.error);
+      r.readAsArrayBuffer(blob);
+    });
+  }
+
+  async function carregarImagem(arquivo, aoAvisar) {
+    const info = `${arquivo.type || 'formato desconhecido'}, ${(arquivo.size / 1048576).toFixed(1)} MB`;
+    if (!arquivo.size) {
+      throw new Error('A foto escolhida veio vazia (pode estar só na nuvem). Abra a foto na galeria para baixá-la e tente de novo.');
+    }
+    try {
+      return await abrirComImg(arquivo);
+    } catch (e) { /* tenta os outros caminhos */ }
+    if (await ehHEIC(arquivo)) {
+      if (aoAvisar) aoAvisar('Convertendo a foto (formato HEIC)…');
+      try {
+        await carregarScript('vendor/heic2any.min.js');
+        let jpeg = await window.heic2any({ blob: arquivo, toType: 'image/jpeg', quality: 0.92 });
+        if (Array.isArray(jpeg)) jpeg = jpeg[0];
+        return await abrirComImg(jpeg);
+      } catch (e) {
+        console.warn('HEIC', e);
+        throw new Error(`Não foi possível converter esta foto HEIC (${info}). Dica: abra a foto na galeria, tire um print da tela e envie o print.`);
+      }
+    }
+    // Último recurso (ex.: foto gigante de 100+ megapixels): decodifica já reduzida
+    for (const opcoes of [undefined, { resizeWidth: 3000, resizeQuality: 'high' }]) {
+      try {
+        if (window.createImageBitmap) return { img: await createImageBitmap(arquivo, opcoes), url: null };
+      } catch (e) { /* tenta a próxima */ }
+    }
+    throw new Error(`Não foi possível abrir esta imagem (${info}). Dica: abra a foto na galeria, tire um print da tela e envie o print.`);
+  }
+
   function desenhar(img, maxLado, recorte) {
-    const r = recorte || { x: 0, y: 0, w: img.naturalWidth || img.width, h: img.naturalHeight || img.height };
+    const r = recorte || { x: 0, y: 0, w: dims(img).w, h: dims(img).h };
     const escala = Math.min(1, maxLado / Math.max(r.w, r.h));
     const c = document.createElement('canvas');
     c.width = Math.max(1, Math.round(r.w * escala));
@@ -47,10 +99,116 @@ const Leitura = (() => {
     });
   }
 
-  // Tons de cinza + contraste esticado: ajuda o OCR com cupons térmicos apagados.
-  function prepararParaOCR(img) {
-    const c = desenhar(img, 2200);
+  function limiarOtsu(hist, n) {
+    let soma = 0;
+    for (let v = 0; v < 256; v++) soma += v * hist[v];
+    let sB = 0, wB = 0, melhorVar = 0, limiar = 128;
+    for (let v = 0; v < 256; v++) {
+      wB += hist[v];
+      if (!wB) continue;
+      const wF = n - wB;
+      if (!wF) break;
+      sB += v * hist[v];
+      const dif = sB / wB - (soma - sB) / wF;
+      const vr = wB * wF * dif * dif;
+      if (vr > melhorVar) { melhorVar = vr; limiar = v; }
+    }
+    return limiar;
+  }
+
+  // Pinta de branco o fundo escuro (mesa) que encosta nas bordas do recorte: as faixas escuras
+  // ao redor da nota confundem o OCR. O texto não encosta na borda, então fica intacto.
+  function apagarFundo(p, w, h) {
+    const n = w * h;
+    const hist = new Uint32Array(256);
+    for (let k = 0; k < n; k++) hist[p[k * 4]]++;
+    const limiar = limiarOtsu(hist, n);
+    const visto = new Uint8Array(n);
+    const fila = new Int32Array(n);
+    let ini = 0, fim = 0;
+    const semear = k => {
+      if (!visto[k] && p[k * 4] <= limiar) { visto[k] = 1; fila[fim++] = k; }
+    };
+    for (let x = 0; x < w; x++) { semear(x); semear((h - 1) * w + x); }
+    for (let y = 0; y < h; y++) { semear(y * w); semear(y * w + w - 1); }
+    while (ini < fim) {
+      const k = fila[ini++];
+      const x = k % w;
+      if (x > 0) semear(k - 1);
+      if (x < w - 1) semear(k + 1);
+      if (k >= w) semear(k - w);
+      if (k < n - w) semear(k + w);
+    }
+    for (let k = 0; k < n; k++) if (visto[k]) p[k * 4] = p[k * 4 + 1] = p[k * 4 + 2] = 255;
+  }
+
+  // Acha a nota na foto: maior região clara (papel) contra o fundo (mesa). Devolve null se não der para separar.
+  function localizarNota(img) {
+    const { w: W0, h: H0 } = dims(img);
+    const esc = Math.min(1, 400 / Math.max(W0, H0));
+    const w = Math.max(1, Math.round(W0 * esc)), h = Math.max(1, Math.round(H0 * esc));
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
     const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0, w, h);
+    const p = ctx.getImageData(0, 0, w, h).data;
+    const n = w * h;
+    const cinza = new Uint8Array(n);
+    const hist = new Uint32Array(256);
+    for (let i = 0; i < n; i++) {
+      const y = (p[i * 4] * 299 + p[i * 4 + 1] * 587 + p[i * 4 + 2] * 114) / 1000 | 0;
+      cinza[i] = y;
+      hist[y]++;
+    }
+    // limiar de Otsu separa papel (claro) de fundo (escuro)
+    const limiar = limiarOtsu(hist, n);
+    // maior componente conectado de pixels claros
+    const visto = new Uint8Array(n);
+    const fila = new Int32Array(n);
+    let maior = null;
+    for (let s = 0; s < n; s++) {
+      if (visto[s] || cinza[s] <= limiar) continue;
+      let ini = 0, fim = 0, qtd = 0, x0 = w, y0 = h, x1 = 0, y1 = 0;
+      fila[fim++] = s;
+      visto[s] = 1;
+      while (ini < fim) {
+        const k = fila[ini++];
+        const x = k % w, y = (k / w) | 0;
+        qtd++;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+        if (x > 0 && !visto[k - 1] && cinza[k - 1] > limiar) { visto[k - 1] = 1; fila[fim++] = k - 1; }
+        if (x < w - 1 && !visto[k + 1] && cinza[k + 1] > limiar) { visto[k + 1] = 1; fila[fim++] = k + 1; }
+        if (y > 0 && !visto[k - w] && cinza[k - w] > limiar) { visto[k - w] = 1; fila[fim++] = k - w; }
+        if (y < h - 1 && !visto[k + w] && cinza[k + w] > limiar) { visto[k + w] = 1; fila[fim++] = k + w; }
+      }
+      if (!maior || qtd > maior.qtd) maior = { qtd, x0, y0, x1, y1 };
+    }
+    if (!maior) return null;
+    const frac = ((maior.x1 - maior.x0 + 1) * (maior.y1 - maior.y0 + 1)) / n;
+    if (frac < 0.08 || frac > 0.9) return null; // nota ocupa a foto toda (ou não achou): usa a foto inteira
+    const m = 0.02 * Math.max(w, h);
+    const x = Math.max(0, (maior.x0 - m) / esc), y = Math.max(0, (maior.y0 - m) / esc);
+    return { x, y, w: Math.min(W0, (maior.x1 + 1 + m) / esc) - x, h: Math.min(H0, (maior.y1 + 1 + m) / esc) - y };
+  }
+
+  // Recorta a nota, amplia para ~1600 px de largura e passa para tons de cinza com contraste esticado.
+  function prepararParaOCR(img) {
+    const { w: W0, h: H0 } = dims(img);
+    const r = localizarNota(img) || { x: 0, y: 0, w: W0, h: H0 };
+    let esc = 1600 / r.w;
+    if (r.h * esc > 4200) esc = 4200 / r.h;
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(r.w * esc));
+    c.height = Math.max(1, Math.round(r.h * esc));
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(img, r.x, r.y, r.w, r.h, 0, 0, c.width, c.height);
     const dados = ctx.getImageData(0, 0, c.width, c.height);
     const p = dados.data;
     const hist = new Uint32Array(256);
@@ -70,6 +228,7 @@ const Leitura = (() => {
       const v = Math.max(0, Math.min(255, (p[i] - base) * escala));
       p[i] = p[i + 1] = p[i + 2] = v;
     }
+    apagarFundo(p, c.width, c.height);
     ctx.putImageData(dados, 0, 0);
     return c;
   }
@@ -93,7 +252,7 @@ const Leitura = (() => {
       const r = window.jsQR(d.data, c.width, c.height, { inversionAttempts: 'attemptBoth' });
       c.width = c.height = 0;
       if (r && r.data) return r.data;
-      if (Math.max(img.naturalWidth, img.naturalHeight) <= maxLado) break;
+      if (Math.max(dims(img).w, dims(img).h) <= maxLado) break;
     }
     return '';
   }
@@ -163,7 +322,6 @@ const Leitura = (() => {
           workerBlobURL: false,
           logger: m => { if (aoProgredirAtual) aoProgredirAtual(m); },
         });
-        await w.setParameters({ tessedit_pageseg_mode: '4', preserve_interword_spaces: '1' });
         return w;
       })();
       worker.catch(() => { worker = null; });
@@ -177,9 +335,15 @@ const Leitura = (() => {
     if (w) { try { (await w).terminate(); } catch (e) { /* ignora */ } }
   }
 
-  async function reconhecer(img, aoProgredir) {
+  // 1ª leitura: limiar global (rápida, boa para nota lisa). 2ª: limiar local (Sauvola), que aguenta
+  // sombra e papel amassado; só roda se a 1ª não tiver certeza do total.
+  const MODOS = [
+    { tessedit_pageseg_mode: '6', thresholding_method: '0', preserve_interword_spaces: '1' },
+    { tessedit_pageseg_mode: '6', thresholding_method: '2', preserve_interword_spaces: '1' },
+  ];
+
+  async function reconhecer(c, modo, aoProgredir) {
     clearTimeout(timerEncerrar);
-    const c = prepararParaOCR(img);
     aoProgredirAtual = aoProgredir;
     let tempo;
     try {
@@ -187,22 +351,25 @@ const Leitura = (() => {
         tempo = setTimeout(() => rejeitar(new Error('A leitura demorou demais.')), 120000);
       });
       const w = await Promise.race([obterWorker(), limite]);
-      const { data } = await Promise.race([w.recognize(c), limite]);
-      return (data && data.text) || '';
+      await w.setParameters(modo);
+      const { data } = await Promise.race([w.recognize(c, {}, { text: true, blocks: true }), limite]);
+      return {
+        texto: (data && data.text) || '',
+        linhas: ((data && data.lines) || []).map(l => ({ texto: l.text, confianca: l.confidence })),
+      };
     } catch (e) {
       await encerrarWorker();
       throw e;
     } finally {
       clearTimeout(tempo);
       aoProgredirAtual = null;
-      c.width = c.height = 0;
       // libera memória do celular se ficar parado
       timerEncerrar = setTimeout(encerrarWorker, 90000);
     }
   }
 
   // ---------- Interpretação do texto ----------
-  const normalizar = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
+  const normalizar = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
 
   function corrigirNumeros(linha) {
     let l = linha.replace(/\bR\s?[S5$]\s?(?=\d)/g, 'R$ ');
@@ -227,39 +394,63 @@ const Leitura = (() => {
   }
 
   const REGRAS_TOTAL = [
-    [/VALOR\s*A\s*PAGAR|TOTAL\s*A\s*PAGAR|VALOR\s*PAGO|TOTAL\s*PAGO|VALOR\s*COBRADO/, 100],
+    [/VALOR\s*A\s*PAGAR|TOTAL\s*A\s*PAGAR|TOTAL\s*PAGO|VALOR\s*COBRADO/, 100],
     [/VALOR\s*TOTAL|TOTAL\s*GERAL|TOTAL\s*R\s?\$|TOTAL\s*D[AO]\s*(CORRIDA|VIAGEM|COMPRA|CONTA|PEDIDO|NOTA|CUPOM)/, 90],
     [/\bTOTAL\b/, 80],
-    [/CARTAO|CREDITO|DEBITO|\bPIX\b/, 50],
-    [/DINHEIRO/, 40],
+    // forma de pagamento: confirma o total, mas sozinha vale pouco (dinheiro entregue pode ter troco)
+    [/VALOR\s*PAGO|CARTAO|CREDITO|DEBITO|\bPIX\b/, 50],
+    [/DINHEIRO/, 15],
   ];
-  const EXCLUIR = /SUB\s*-?\s*TOTAL|TRIBUT|IMPOSTO|LEI\s*N?.?\s*12|12\.?741|IBPT|APROX|TROCO|ITENS|\bQTD|QUANTIDADE|\bICMS|\bPIS\b|COFINS|DESCONTO/;
+  // fora da conta: tributos, troco, desconto, subtotal, contagem de itens e o cabeçalho da tabela de itens
+  const EXCLUIR = /SUB\s*-?\s*TOTAL|TRIBUT|IMPOSTO|LEI\s*N?.?\s*12|12\.?741|IBPT|APROX|TROCO|ITENS|\bQTD|QUANTIDADE|\bICMS|\bPIS\b|COFINS|DESCONTO|\bVL\.?\s*UNIT|DESCRICAO|\bCODIGO/;
+  // linha de item da NFC-e: quantidade com 3-4 casas (1,0000) ou unidade seguida de preço (UN X 39,90)
+  const ITEM = /\b\d+[.,]\d{3,4}\b|\b(UN|UND|UNID|KG|LT|PC|PCT|CX)\b\s*(X\s*)?\d/;
 
-  function extrairValor(linhas, norm) {
-    let melhor = null;
-    const considerar = (valor, pontos) => {
-      if (!melhor || pontos > melhor.pontos || (pontos === melhor.pontos && valor > melhor.valor)) melhor = { valor, pontos };
+  // Cada valor ganha pontos conforme as linhas onde aparece (total, a pagar, cartão...). Aparecer em
+  // várias linhas (ou nas duas leituras) reforça; bater com a soma dos itens também. O maior vence.
+  function extrairValor(passes) {
+    const pesos = new Map();
+    const somas = new Set();
+    const anotar = (v, p) => {
+      if (!pesos.has(v)) pesos.set(v, []);
+      pesos.get(v).push(p);
     };
-    norm.forEach((n, i) => {
-      if (EXCLUIR.test(n)) return;
-      const regra = REGRAS_TOTAL.find(([re]) => re.test(n));
-      if (!regra) return;
-      const vals = valoresNaLinha(linhas[i]);
-      if (vals.length) return considerar(vals[vals.length - 1], regra[1]);
-      // valor na linha de baixo (layout em duas linhas)
-      if (i + 1 < linhas.length && !EXCLUIR.test(norm[i + 1])) {
-        const prox = valoresNaLinha(linhas[i + 1]);
-        if (prox.length) considerar(prox[prox.length - 1], regra[1] - 15);
-      }
-    });
-    if (!melhor) {
+    for (const { linhas, norm } of passes) {
+      let soma = 0, itens = 0;
       norm.forEach((n, i) => {
         if (EXCLUIR.test(n)) return;
-        const pontos = /R\$/.test(linhas[i]) ? 30 : 10;
-        for (const v of valoresNaLinha(linhas[i])) considerar(v, pontos);
+        const vals = valoresNaLinha(linhas[i]);
+        if (ITEM.test(n) && vals.length) {
+          soma += vals[vals.length - 1];
+          itens++;
+        }
+        const regra = REGRAS_TOTAL.find(([re]) => re.test(n));
+        if (!regra) {
+          for (const v of vals) anotar(v, /R\$/.test(linhas[i]) ? 10 : 5);
+          return;
+        }
+        if (vals.length) return anotar(vals[vals.length - 1], regra[1]);
+        // valor na linha de baixo (layout em duas linhas)
+        if (i + 1 < linhas.length && !EXCLUIR.test(norm[i + 1])) {
+          const prox = valoresNaLinha(linhas[i + 1]);
+          if (prox.length) anotar(prox[prox.length - 1], regra[1] - 15);
+        }
       });
+      if (itens) somas.add(soma);
+      // total ilegível, mas itens legíveis: a soma deles vira candidata
+      if (itens >= 2 && !pesos.has(soma)) anotar(soma, 30);
     }
-    return melhor ? melhor.valor : null;
+    let melhor = null;
+    for (const [v, ps] of pesos) {
+      const max = Math.max.apply(null, ps);
+      const resto = ps.reduce((a, b) => a + b, 0) - max;
+      const pontos = max + 0.5 * resto + (somas.has(v) ? 40 : 0);
+      if (!melhor || pontos > melhor.pontos || (pontos === melhor.pontos && v > melhor.valor)) {
+        melhor = { valor: v, pontos, max, vezes: ps.length };
+      }
+    }
+    if (!melhor) return { valor: null, confiante: false };
+    return { valor: melhor.valor, confiante: melhor.max >= 80 && (melhor.vezes >= 2 || somas.has(melhor.valor)) };
   }
 
   const MESES = ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
@@ -305,8 +496,12 @@ const Leitura = (() => {
   const SUFIXOS = /\s+(LTDA|ME|EPP|EIRELI|S\/?A|S\.A\.?|MEI)\.?$/;
   const PEQUENAS = new Set(['DA', 'DE', 'DO', 'DAS', 'DOS', 'E']);
 
-  function extrairEstabelecimento(linhas, norm) {
+  const compactar = l => corrigirNumeros(l.trim()).replace(/\s+/g, ' ');
+
+  // confiavel(linha): se veio da leitura, só aceita linhas que o OCR leu com boa confiança
+  function extrairEstabelecimento(linhas, norm, confiavel) {
     for (let i = 0; i < Math.min(8, linhas.length); i++) {
+      if (confiavel && !confiavel(linhas[i])) continue;
       const t = linhas[i].replace(/\s+/g, ' ').trim();
       const n = norm[i];
       const semEspaco = t.replace(/\s/g, '');
@@ -315,6 +510,10 @@ const Leitura = (() => {
       let nome = t.replace(/[^\p{L}\p{N}&.\-/' ]/gu, '').replace(/\s+/g, ' ').trim();
       for (let k = 0; k < 2; k++) nome = nome.replace(SUFIXOS, '');
       if (nome.length < 4) continue;
+      // descarta ruído do OCR (carimbos, logos): palavras curtas demais não formam um nome
+      const palavras = nome.split(' ');
+      const media = palavras.reduce((s, p) => s + p.length, 0) / palavras.length;
+      if (media < 3.5 || !palavras.some(p => p.length >= 4)) continue;
       return nome.split(' ').map((p, j) => {
         const up = p.toUpperCase();
         if (j > 0 && PEQUENAS.has(up)) return p.toLowerCase();
@@ -371,20 +570,27 @@ const Leitura = (() => {
     return tipo || '';
   }
 
-  function interpretarTexto(texto, hoje) {
+  // Aceita o texto de uma leitura ou uma lista com o texto de cada leitura.
+  function interpretarTexto(textos, hoje, confiavel) {
     hoje = hoje || new Date();
-    const linhas = (texto || '').split(/\r?\n/).map(l => corrigirNumeros(l.trim())).filter(l => l.length > 0);
-    const norm = linhas.map(normalizar);
-    const data = extrairData(norm, hoje);
-    const hora = extrairHora(norm, data ? data.i : null);
-    const tipo = classificar(norm);
+    const passes = (Array.isArray(textos) ? textos : [textos]).map(t => {
+      const linhas = (t || '').split(/\r?\n/).map(l => corrigirNumeros(l.trim())).filter(l => l.length > 0);
+      return { linhas, norm: linhas.map(normalizar) };
+    });
+    const base = passes.find(x => x.norm.length) || { linhas: [], norm: [] };
+    const todas = passes.reduce((acc, x) => acc.concat(x.norm), []);
+    const data = extrairData(todas, hoje);
+    const hora = extrairHora(todas, data ? data.i : null);
+    const tipo = classificar(base.norm);
+    const valor = extrairValor(passes);
     return {
-      valor: extrairValor(linhas, norm),
+      valor: valor.valor,
+      confiante: valor.confiante,
       data: data ? data.data : null,
       hora,
       tipo,
-      estabelecimento: extrairEstabelecimento(linhas, norm),
-      descricao: sugerirDescricao(tipo, norm.join('\n'), hora),
+      estabelecimento: extrairEstabelecimento(base.linhas, base.norm, confiavel),
+      descricao: sugerirDescricao(tipo, base.norm.join('\n'), hora),
     };
   }
 
@@ -408,19 +614,33 @@ const Leitura = (() => {
       const textoQR = await lerQR(img);
       if (textoQR) qr = interpretarQR(textoQR);
     } catch (e) { console.warn('QR', e); }
-    let texto = '';
+    const textos = [];
+    const boas = new Set(); // linhas lidas com confiança >= 70
     let falhou = false;
+    let c = null;
     try {
-      texto = await reconhecer(img, aoProgredir);
+      c = prepararParaOCR(img);
+      for (let k = 0; k < MODOS.length; k++) {
+        const lido = await reconhecer(c, MODOS[k], m => {
+          if (aoProgredir) aoProgredir(Object.assign({}, m, { passo: k + 1 }));
+        });
+        textos.push(lido.texto);
+        for (const l of lido.linhas) if (l.confianca >= 70) boas.add(compactar(l.texto));
+        // para na 1ª leitura se ela já tem certeza do total (ou se o QR code já trouxe o valor)
+        if (qr.valor || interpretarTexto(textos).confiante) break;
+      }
     } catch (e) {
       console.warn('OCR', e);
-      falhou = true;
+      falhou = !textos.length;
+    } finally {
+      if (c) c.width = c.height = 0;
     }
-    const r = combinar(qr, interpretarTexto(texto));
+    const r = combinar(qr, interpretarTexto(textos, null, l => boas.has(compactar(l))));
     r.falhouOCR = falhou;
-    r.textoLido = texto;
+    r.textoLido = textos.join('\n-----\n');
+    r.leituras = textos.length;
     return r;
   }
 
-  return { carregarImagem, desenhar, canvasParaBlob, analisar, interpretarTexto, interpretarQR, combinar, carregarScript };
+  return { carregarImagem, desenhar, canvasParaBlob, analisar, interpretarTexto, interpretarQR, combinar, carregarScript, prepararParaOCR, localizarNota };
 })();
